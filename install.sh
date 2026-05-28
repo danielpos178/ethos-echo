@@ -6,8 +6,11 @@ YELLOW='\033[33m'
 CYAN='\033[36m'
 GREEN='\033[32m'
 
-[ -f ~/.bashrc ] && cp ~/.bashrc ~/.bashrc.backup.$(date +%s)
-[ -f .bashrc ] && cp .bashrc ~/.bashrc
+if [ -f .bashrc ]; then
+    [ -f ~/.bashrc ] && cp ~/.bashrc ~/.bashrc.backup.$(date +%s)
+    cp .bashrc ~/.bashrc
+    printf "%b\n" "${CYAN}Updated ~/.bashrc from repository${RC}"
+fi
 
 command_exists() {
 for cmd in "$@"; do
@@ -90,16 +93,16 @@ checkPackageManager() {
 checkSuperUser() {
     ## Check SuperUser Group
     SUPERUSERGROUP='wheel sudo root'
+    SUGROUP=""
     for sug in ${SUPERUSERGROUP}; do
-        if groups | grep -q "${sug}"; then
+        if id -nG | grep -qw "${sug}"; then
             SUGROUP=${sug}
             printf "%b\n" "${CYAN}Super user group ${SUGROUP}${RC}"
             break
         fi
     done
 
-    ## Check if member of the sudo group.
-    if ! groups | grep -q "${SUGROUP}"; then
+    if [ -z "$SUGROUP" ]; then
         printf "%b\n" "${RED}You need to be a member of the sudo group to run me!${RC}"
         exit 1
     fi
@@ -118,7 +121,7 @@ checkEnv() {
     checkArch
     checkEscalationTool
     checkCommandRequirements "curl groups $ESCALATION_TOOL"
-    checkPackageManager 'nala apt-get dnf pacman zypper apk xbps-install eopkg'
+    checkPackageManager 'pacman'
     checkCurrentDirectoryWritable
     checkSuperUser
 }
@@ -153,11 +156,11 @@ makeDWM() {
     [ ! -d "$HOME/.local/share" ] && mkdir -p "$HOME/.local/share/"
     if [ ! -d "$HOME/.local/share/dwm-gossamer" ]; then
 	printf "%b\n" "${YELLOW}dwm-gossamer not found, cloning repository...${RC}"
-	cd "$HOME/.local/share/" && git clone https://github.com/Daniel1788/dwm-gossamer.git
-	cd dwm-gossamer/
+	cd "$HOME/.local/share/" && git clone https://github.com/Daniel1788/dwm-gossamer.git || exit 1
+	cd dwm-gossamer/ || exit 1
     else
 	printf "%b\n" "${GREEN}dwm-gossamer directory already exists, replacing..${RC}"
-	cd "$HOME/.local/share/dwm-gossamer" && git pull
+	cd "$HOME/.local/share/dwm-gossamer" && git pull || exit 1
     fi
     "$ESCALATION_TOOL" make clean install
     cd "$HOME/.local/share/dwm-gossamer/slstatus"
