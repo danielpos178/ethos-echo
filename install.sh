@@ -100,34 +100,14 @@ checkAURHelper() {
         else
             printf "%b\n" "${YELLOW}No AUR helper found. Installing paru...${RC}"
 
-            # Install base-devel for building
+            printf "%b\n" "${YELLOW}Installing paru as AUR helper...${RC}"
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm base-devel git
-
-            # Create build user for AUR (security best practice)
-            if ! id -u "aur_builder" &>/dev/null; then
-                "$ESCALATION_TOOL" useradd -r -m -d /tmp/aur_builder -s /bin/bash aur_builder
-                echo "aur_builder ALL=(ALL) NOPASSWD: /usr/bin/pacman" | "$ESCALATION_TOOL" tee /etc/sudoers.d/aur_builder > /dev/null
-            fi
-
-            # Clone and build paru
-            rm -rf /tmp/paru
-            if cd /tmp && git clone https://aur.archlinux.org/paru.git; then
-                chown -R aur_builder:aur_builder /tmp/paru
-                if su - aur_builder -c "cd /tmp/paru && makepkg -si --noconfirm"; then
-                    AUR_HELPER="paru"
-                else
-                    printf "%b\n" "${RED}Failed to build paru from AUR${RC}"
-                    exit 1
-                fi
-            else
-                printf "%b\n" "${RED}Failed to clone paru repository${RC}"
-                exit 1
-            fi
-
-            # Cleanup
-            rm -rf /tmp/paru
-            "$ESCALATION_TOOL" userdel -r aur_builder 2>/dev/null || true
-            "$ESCALATION_TOOL" rm -f /etc/sudoers.d/aur_builder
+            local install_dir="/tmp/paru-bin"
+            rm -rf "$install_dir"
+            "$ESCALATION_TOOL" git clone https://aur.archlinux.org/paru-bin.git "$install_dir" && "$ESCALATION_TOOL" chown -R "$USER": "$install_dir"
+            cd "$install_dir" && makepkg --noconfirm -si
+            cd /tmp
+            printf "%b\n" "${GREEN}Paru installed${RC}"
         fi
         printf "%b\n" "${CYAN}Using ${AUR_HELPER} for AUR packages${RC}"
     fi
