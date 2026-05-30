@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 
 RC='\033[0m'
 RED='\033[31m'
@@ -21,19 +21,20 @@ setup_logging() {
             echo "Command: $0 $*"
             echo ""
         } >> "$LOG_FILE"
-        exec > >(tee -a "$LOG_FILE") 2>&1
     fi
 }
 
 log() {
-    [ "$LOG_ENABLED" = true ] && echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+    if [ "$LOG_ENABLED" = true ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+    fi
 }
 
 command_exists() {
-for cmd in "$@"; do
-    command -v "$cmd" >/dev/null 2>&1 || return 1
-done
-return 0
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || return 1
+    done
+    return 0
 }
 
 backup_config() {
@@ -44,7 +45,6 @@ backup_config() {
         printf "%b\n" "${YELLOW}Backed up %s -> %s${RC}" "$dest" "$backup"
     fi
 }
-
 
 checkArch() {
     case "$(uname -m)" in
@@ -61,7 +61,7 @@ checkEscalationTool() {
     ## Check for escalation tools.
     if [ -z "$ESCALATION_TOOL_CHECKED" ]; then
         if [ "$(id -u)" = "0" ]; then
-            ESCALATION_TOOL="eval"
+            ESCALATION_TOOL=""
             ESCALATION_TOOL_CHECKED=true
             printf "%b\n" "${CYAN}Running as root, no escalation needed${RC}"
             log "Running as root"
@@ -109,25 +109,25 @@ checkPackageManager() {
     done
 
     ## Enable apk community packages
-    if [ "$PACKAGER" = "apk" ] && grep -qE '^#.*community' /etc/apk/repositories; then
-        "$ESCALATION_TOOL" sed -i '/community/s/^#//' /etc/apk/repositories
-        "$ESCALATION_TOOL" "$PACKAGER" update
+    if [ "$PACKAGER" = "apk" ] && grep -qE '^#.*community' /etc/apk/repositories 2>/dev/null; then
+        $ESCALATION_TOOL sed -i '/community/s/^#//' /etc/apk/repositories
+        $ESCALATION_TOOL "$PACKAGER" update
         log "Enabled Alpine community repository"
     fi
 
     ## Enable apk testing packages
     if [ "$PACKAGER" = "apk" ]; then
-        if grep -qE '^#.*testing' /etc/apk/repositories; then
-            "$ESCALATION_TOOL" sed -i '/testing/s/^#//' /etc/apk/repositories
-            "$ESCALATION_TOOL" "$PACKAGER" update
+        if grep -qE '^#.*testing' /etc/apk/repositories 2>/dev/null; then
+            $ESCALATION_TOOL sed -i '/testing/s/^#//' /etc/apk/repositories
+            $ESCALATION_TOOL "$PACKAGER" update
             printf "%b\n" "${CYAN}Enabled Alpine testing repository${RC}"
             log "Enabled Alpine testing repository"
-        elif ! grep -qE '^[^#].*testing' /etc/apk/repositories; then
+        elif ! grep -qE '^[^#].*testing' /etc/apk/repositories 2>/dev/null; then
             local apk_version
-            apk_version=$(sed -n 's|^https\?://.*alpine/\([^/]*\)/main.*|\1|p' /etc/apk/repositories | head -1)
+            apk_version=$(sed -n 's|^https\?://.*alpine/\([^/]*\)/main.*|\1|p' /etc/apk/repositories 2>/dev/null | head -1)
             if [ -n "$apk_version" ]; then
-                "$ESCALATION_TOOL" tee -a /etc/apk/repositories > /dev/null <<< "https://dl-cdn.alpinelinux.org/alpine/$apk_version/testing"
-                "$ESCALATION_TOOL" "$PACKAGER" update
+                echo "https://dl-cdn.alpinelinux.org/alpine/$apk_version/testing" | $ESCALATION_TOOL tee -a /etc/apk/repositories > /dev/null
+                $ESCALATION_TOOL "$PACKAGER" update
                 printf "%b\n" "${CYAN}Added Alpine testing repository (branch: $apk_version)${RC}"
                 log "Added Alpine testing repository (branch: ${apk_version})"
             fi
@@ -136,7 +136,7 @@ checkPackageManager() {
 
     ## Sync xbps repository indexes
     if [ "$PACKAGER" = "xbps-install" ]; then
-        "$ESCALATION_TOOL" "$PACKAGER" -S
+        $ESCALATION_TOOL "$PACKAGER" -S
         log "Synced xbps repository indexes"
     fi
 
@@ -152,9 +152,16 @@ checkAURHelper() {
         pacman)
             if ! command_exists yay; then
                 printf "%b\n" "${YELLOW}Installing yay as AUR helper...${RC}"
-                "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm base-devel git
-                cd /opt && "$ESCALATION_TOOL" git clone https://aur.archlinux.org/yay-bin.git && "$ESCALATION_TOOL" chown -R "$USER": ./yay-bin
-                cd yay-bin && makepkg --noconfirm -si
+                $ESCALATION_TOOL "$PACKAGER" -S --needed --noconfirm base-devel git
+
+                TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+                cd "$TEMP_BUILD_DIR" || exit 1
+                git clone https://aur.archlinux.org/yay-bin.git || exit 1
+                cd yay-bin || exit 1
+                makepkg --noconfirm -si || exit 1
+                cd "$HOME" || exit 1
+                rm -rf "$TEMP_BUILD_DIR"
+
                 printf "%b\n" "${GREEN}Yay installed${RC}"
             else
                 printf "%b\n" "${GREEN}Aur helper already installed${RC}"
@@ -162,7 +169,7 @@ checkAURHelper() {
             AUR_HELPER="yay"
             ;;
         *)
-            printf "%b\n" "${RED}Unsupported package manager: ""$PACKAGER""${RC}"
+            AUR_HELPER=""
             ;;
     esac
 }
@@ -172,14 +179,14 @@ checkSuperUser() {
     SUPERUSERGROUP='wheel sudo root'
     SUGROUP=""
     for sug in ${SUPERUSERGROUP}; do
-        if id -nG | grep -qw "${sug}"; then
+        if id -nG "$USER" 2>/dev/null | grep -qw "${sug}"; then
             SUGROUP=${sug}
             printf "%b\n" "${CYAN}Super user group ${SUGROUP}${RC}"
             break
         fi
     done
 
-    if [ -z "$SUGROUP" ]; then
+    if [ -z "$SUGROUP" ] && [ "$(id -u)" != "0" ]; then
         printf "%b\n" "${RED}You need to be a member of the wheel, sudo, or root group to run me!${RC}"
         exit 1
     fi
@@ -197,14 +204,14 @@ checkCurrentDirectoryWritable() {
 checkEnv() {
     checkArch
     checkEscalationTool
-    checkPackageManager 'apk xbps-install pacman'
+    checkPackageManager 'pacman xbps-install apk'
     if ! command_exists curl; then
         printf "%b\n" "${YELLOW}Installing curl...${RC}"
         log "Installing curl"
         case "$PACKAGER" in
-            pacman) "$ESCALATION_TOOL" "$PACKAGER" -S --noconfirm curl ;;
-            xbps-install) "$ESCALATION_TOOL" "$PACKAGER" -y curl ;;
-            apk) "$ESCALATION_TOOL" "$PACKAGER" add curl ;;
+            pacman) $ESCALATION_TOOL "$PACKAGER" -S --noconfirm curl ;;
+            xbps-install) $ESCALATION_TOOL "$PACKAGER" -y curl ;;
+            apk) $ESCALATION_TOOL "$PACKAGER" add curl ;;
         esac
         if ! command_exists curl; then
             printf "%b\n" "${RED}Failed to install curl${RC}"
@@ -213,7 +220,7 @@ checkEnv() {
         fi
         log "curl installed"
     fi
-    checkCommandRequirements "groups $ESCALATION_TOOL"
+    checkCommandRequirements "git"
     checkCurrentDirectoryWritable
     checkSuperUser
     checkAURHelper
@@ -222,6 +229,14 @@ checkEnv() {
 
 setupChaoticAUR() {
     [ "$PACKAGER" != "pacman" ] && return
+
+    # Check if Chaotic AUR is already configured
+    if grep -q '^\[chaotic-aur\]' /etc/pacman.conf 2>/dev/null; then
+        printf "%b\n" "${GREEN}Chaotic AUR already configured. Skipping.${RC}"
+        log "Chaotic AUR already configured"
+        return
+    fi
+
     printf "%b\n" "${CYAN}Chaotic AUR provides pre-built binaries for many AUR packages,${RC}"
     printf "%b\n" "${CYAN}saving you from having to build them locally.${RC}"
     printf "%b\n" "${YELLOW}Would you like to enable Chaotic AUR? (y/N): ${RC}"
@@ -229,18 +244,19 @@ setupChaoticAUR() {
     case "$choice" in
         y|Y|yes|YES)
             printf "%b\n" "${YELLOW}Setting up Chaotic AUR...${RC}"
-            "$ESCALATION_TOOL" pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com
-            "$ESCALATION_TOOL" pacman-key --lsign-key 3056513887B78AEB
-            "$ESCALATION_TOOL" pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst'
-            "$ESCALATION_TOOL" pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
+            $ESCALATION_TOOL pacman-key --recv-key 3056513887B78AEB --keyserver keyserver.ubuntu.com
+            $ESCALATION_TOOL pacman-key --lsign-key 3056513887B78AEB
+            $ESCALATION_TOOL pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-keyring.pkg.tar.zst'
+            $ESCALATION_TOOL pacman -U --noconfirm 'https://cdn-mirror.chaotic.cx/chaotic-aur/chaotic-mirrorlist.pkg.tar.zst'
             if ! grep -q '^\[chaotic-aur\]' /etc/pacman.conf; then
                 {
                     printf '%s\n' '[chaotic-aur]'
                     printf '%s\n' 'Include = /etc/pacman.d/chaotic-mirrorlist'
-                } | "$ESCALATION_TOOL" tee -a /etc/pacman.conf > /dev/null
+                } | $ESCALATION_TOOL tee -a /etc/pacman.conf > /dev/null
             fi
-            "$ESCALATION_TOOL" "$PACKAGER" -Sy
-            printf "%b\n" "${GREEN}Chaotic AUR enabled. paru will prefer binary packages.${RC}"
+            $ESCALATION_TOOL "$PACKAGER" -Sy
+            printf "%b\n" "${GREEN}Chaotic AUR enabled. yay will prefer binary packages.${RC}"
+            log "Chaotic AUR enabled"
             ;;
         *)
             printf "%b\n" "${CYAN}Skipping Chaotic AUR setup${RC}"
@@ -253,42 +269,51 @@ setupLemurs() {
 
     case "$PACKAGER" in
         pacman)
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm lemurs
-            "$ESCALATION_TOOL" systemctl disable display-manager.service 2>/dev/null || true
-            "$ESCALATION_TOOL" systemctl enable lemurs.service
+            if $ESCALATION_TOOL "$PACKAGER" -S --needed --noconfirm lemurs 2>/dev/null; then
+                $ESCALATION_TOOL systemctl disable display-manager.service 2>/dev/null || true
+                $ESCALATION_TOOL systemctl enable lemurs.service 2>/dev/null || true
+            else
+                printf "%b\n" "${YELLOW}Lemurs not available on this system, skipping...${RC}"
+                return
+            fi
             ;;
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" -y lemurs
-            "$ESCALATION_TOOL" ln -sf /etc/sv/lemurs /var/service/
-            "$ESCALATION_TOOL" rm -f /var/service/agetty-tty2
+            if $ESCALATION_TOOL "$PACKAGER" -y lemurs 2>/dev/null; then
+                $ESCALATION_TOOL ln -sf /etc/sv/lemurs /var/service/ 2>/dev/null || true
+                $ESCALATION_TOOL rm -f /var/service/agetty-tty2 2>/dev/null || true
+            else
+                printf "%b\n" "${YELLOW}Lemurs not available on this system, skipping...${RC}"
+                return
+            fi
             ;;
         apk)
-            if "$ESCALATION_TOOL" "$PACKAGER" add lemurs; then
-                "$ESCALATION_TOOL" rc-update add lemurs default
+            if $ESCALATION_TOOL "$PACKAGER" add lemurs 2>/dev/null; then
+                $ESCALATION_TOOL rc-update add lemurs default 2>/dev/null || true
             else
                 printf "%b\n" "${YELLOW}lemurs not available in Alpine repos. Skipping display manager.${RC}"
+                printf "%b\n" "${YELLOW}Consider using: $ESCALATION_TOOL rc-service agetty-tty1 start${RC}"
                 return
             fi
             ;;
     esac
 
     # Create session scripts
-    "$ESCALATION_TOOL" mkdir -p /etc/lemurs/wms /etc/lemurs/wayland
+    $ESCALATION_TOOL mkdir -p /etc/lemurs/wms /etc/lemurs/wayland
 
     if [ "$SETUP_TYPE" = "dwm" ]; then
-        "$ESCALATION_TOOL" tee /etc/lemurs/wms/dwm > /dev/null <<'EOF'
-#!/bin/sh
-exec dbus-launch --exit-with-session dwm
-EOF
-        "$ESCALATION_TOOL" chmod +x /etc/lemurs/wms/dwm
+        {
+            printf '#!/bin/sh\n'
+            printf 'exec dbus-launch --exit-with-session dwm\n'
+        } | $ESCALATION_TOOL tee /etc/lemurs/wms/dwm > /dev/null
+        $ESCALATION_TOOL chmod +x /etc/lemurs/wms/dwm
         printf "%b\n" "${GREEN}DWM session script created at /etc/lemurs/wms/dwm${RC}"
-    log "DWM session script created"
+        log "DWM session script created"
     elif [ "$SETUP_TYPE" = "mango" ]; then
-        "$ESCALATION_TOOL" tee /etc/lemurs/wayland/mango > /dev/null <<'EOF'
-#!/bin/sh
-exec dbus-launch --exit-with-session mango
-EOF
-        "$ESCALATION_TOOL" chmod +x /etc/lemurs/wayland/mango
+        {
+            printf '#!/bin/sh\n'
+            printf 'exec dbus-launch --exit-with-session mango\n'
+        } | $ESCALATION_TOOL tee /etc/lemurs/wayland/mango > /dev/null
+        $ESCALATION_TOOL chmod +x /etc/lemurs/wayland/mango
         printf "%b\n" "${GREEN}Mango session script created at /etc/lemurs/wayland/mango${RC}"
     fi
 
@@ -325,66 +350,91 @@ choose_setup() {
 
 setupFlatpak() {
     printf "%b\n" "${YELLOW}Setting up Flatpak...${RC}"
-    case "$PACKAGER" in
-        pacman)
-            # Install Flatpak
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm flatpak
 
-            # Add Flathub repository
-            "$ESCALATION_TOOL" flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-            ;;
-        xbps-install)
-            # Install Flatpak
-            "$ESCALATION_TOOL" "$PACKAGER" -y flatpak
+    # Check if flatpak is already installed
+    if ! command_exists flatpak; then
+        case "$PACKAGER" in
+            pacman)
+                $ESCALATION_TOOL "$PACKAGER" -S --needed --noconfirm flatpak
+                printf "%b\n" "${GREEN}Flatpak installed${RC}"
+                ;;
+            xbps-install)
+                $ESCALATION_TOOL "$PACKAGER" -y flatpak
+                printf "%b\n" "${GREEN}Flatpak installed${RC}"
+                ;;
+            apk)
+                $ESCALATION_TOOL "$PACKAGER" add flatpak
+                printf "%b\n" "${GREEN}Flatpak installed${RC}"
+                ;;
+        esac
+    else
+        printf "%b\n" "${GREEN}Flatpak already installed${RC}"
+    fi
 
-            # Add Flathub repository
-            "$ESCALATION_TOOL" flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-            ;;
-        apk)
-            # Install Flatpak
-            "$ESCALATION_TOOL" "$PACKAGER" add flatpak
+    # Check if Flathub remote is already added
+    if ! flatpak remote-list 2>/dev/null | grep -q flathub; then
+        $ESCALATION_TOOL flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+        printf "%b\n" "${GREEN}Flathub repository added${RC}"
+        log "Flathub repository added"
+    else
+        printf "%b\n" "${GREEN}Flathub repository already configured${RC}"
+    fi
 
-            # Add Flathub repository
-            "$ESCALATION_TOOL" flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-            ;;
-    esac
-    printf "%b\n" "${GREEN}Flatpak configured with Flathub repository${RC}"
+    printf "%b\n" "${GREEN}Flatpak configured${RC}"
+    log "Flatpak configured"
 }
 
 installGhostty() {
-    printf "%b\n" "${YELLOW}Installing Ghostty terminal...${RC}"
+    printf "%b\n" "${YELLOW}Setting up Ghostty terminal...${RC}"
+
+    # Check if Ghostty is already installed
+    if command_exists ghostty; then
+        printf "%b\n" "${GREEN}Ghostty already installed${RC}"
+        log "Ghostty already installed"
+        return
+    fi
+
+    if flatpak list 2>/dev/null | grep -q ghostty; then
+        printf "%b\n" "${GREEN}Ghostty already installed via Flatpak${RC}"
+        log "Ghostty already installed"
+        return
+    fi
+
+    printf "%b\n" "${YELLOW}Installing Ghostty...${RC}"
     case "$PACKAGER" in
         pacman)
-            # Install Ghostty from AUR
-            "$AUR_HELPER" -S --needed --noconfirm ghostty
+            if [ -n "$AUR_HELPER" ]; then
+                if $ESCALATION_TOOL "$AUR_HELPER" -S --needed --noconfirm ghostty 2>/dev/null; then
+                    printf "%b\n" "${GREEN}Ghostty installed${RC}"
+                    log "Ghostty installed"
+                else
+                    printf "%b\n" "${YELLOW}Ghostty not in AUR, installing via Flatpak...${RC}"
+                    $ESCALATION_TOOL flatpak install -y flathub com.mitchellh.ghostty
+                fi
+            else
+                printf "%b\n" "${YELLOW}Installing Ghostty via Flatpak...${RC}"
+                $ESCALATION_TOOL flatpak install -y flathub com.mitchellh.ghostty
+            fi
             ;;
         xbps-install)
-            # Ghostty not in Void repos, install via Flatpak
-            if command_exists flatpak && flatpak list 2>/dev/null | grep -q ghostty; then
-                printf "%b\n" "${GREEN}Ghostty already installed via Flatpak${RC}"
-            else
-                printf "%b\n" "${YELLOW}Installing Ghostty via Flatpak...${RC}"
-                "$ESCALATION_TOOL" flatpak install -y flathub com.mitchellh.ghostty
-            fi
+            printf "%b\n" "${YELLOW}Installing Ghostty via Flatpak...${RC}"
+            $ESCALATION_TOOL flatpak install -y flathub com.mitchellh.ghostty
             ;;
         apk)
-            # Ghostty not in Alpine repos, install via Flatpak
-            if command_exists flatpak && flatpak list 2>/dev/null | grep -q ghostty; then
-                printf "%b\n" "${GREEN}Ghostty already installed via Flatpak${RC}"
-            else
-                printf "%b\n" "${YELLOW}Installing Ghostty via Flatpak...${RC}"
-                "$ESCALATION_TOOL" flatpak install -y flathub com.mitchellh.ghostty
-            fi
+            printf "%b\n" "${YELLOW}Installing Ghostty via Flatpak...${RC}"
+            $ESCALATION_TOOL flatpak install -y flathub com.mitchellh.ghostty
             ;;
     esac
+    printf "%b\n" "${GREEN}Ghostty configured${RC}"
+    log "Ghostty configured"
 }
 
 setupDWM() {
     printf "%b\n" "${YELLOW}Installing dwm-gossamer...${RC}"
     log "Setting up DWM dependencies"
-    case "$PACKAGER" in # Install pre-Requisites
+    case "$PACKAGER" in
         pacman)
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm \
+            $ESCALATION_TOOL "$PACKAGER" -S --needed --noconfirm \
               base-devel git linux-headers unzip curl wget \
               xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xprop xorg-xset xorg-xhost xf86-input-libinput \
               libx11 libxinerama libxft libxcb imlib2 fontconfig freetype2 \
@@ -395,12 +445,13 @@ setupDWM() {
               xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
               firefox mate-polkit alsa-utils pavucontrol pipewire gnome-keyring \
               networkmanager network-manager-applet openssh nvim \
-              fzf bat fd eza \
+              fzf bat fd eza ripgrep \
               ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
-              fastfetch starship zoxide keychain man-db
+              fastfetch starship zoxide keychain man-db \
+              dbus xauth topgrade
             ;;
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" -y \
+            $ESCALATION_TOOL "$PACKAGER" -y \
               base-devel make gcc git linux-headers unzip curl wget \
               xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
               libX11 libX11-devel libXinerama libXinerama-devel libXft libXft-devel \
@@ -413,12 +464,13 @@ setupDWM() {
               xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
               firefox polkit xfce-polkit alsa-utils pavucontrol pipewire gnome-keyring \
               NetworkManager network-manager-applet openssh neovim \
-              fzf bat fd eza \
+              fzf bat fd eza ripgrep \
               ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
-              fastfetch starship zoxide keychain man-db
+              fastfetch starship zoxide keychain man-db \
+              dbus xauth topgrade
             ;;
         apk)
-            "$ESCALATION_TOOL" "$PACKAGER" add \
+            $ESCALATION_TOOL "$PACKAGER" add \
               build-base make gcc git linux-headers unzip curl wget \
               xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
               libX11 libXinerama libXft libxcb imlib2 fontconfig freetype \
@@ -429,12 +481,13 @@ setupDWM() {
               xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
               firefox polkit alsa-utils pavucontrol pipewire gnome-keyring \
               networkmanager network-manager-applet openssh neovim \
-              fzf bat fd eza \
+              fzf bat fd eza ripgrep \
               ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
-              fastfetch starship zoxide keychain man-db
+              fastfetch starship zoxide keychain man-db \
+              dbus xauth topgrade
             ;;
         *)
-            printf "%b\n" "${RED}Unsupported package manager: ""$PACKAGER""${RC}"
+            printf "%b\n" "${RED}Unsupported package manager: $PACKAGER${RC}"
             exit 1
             ;;
     esac
@@ -442,29 +495,44 @@ setupDWM() {
 
 makeDWM() {
     log "Building DWM"
-    [ ! -d "$HOME/.local/share" ] && mkdir -p "$HOME/.local/share/"
+    mkdir -p "$HOME/.local/share" || exit 1
+
     if [ ! -d "$HOME/.local/share/dwm-gossamer" ]; then
-	printf "%b\n" "${YELLOW}dwm-gossamer not found, cloning repository...${RC}"
-	cd "$HOME/.local/share/" || exit 1
-	git clone https://github.com/Daniel1788/dwm-gossamer.git || exit 1
-	log "Cloned dwm-gossamer repository"
-	cd dwm-gossamer/ || exit 1
+        printf "%b\n" "${YELLOW}dwm-gossamer not found, cloning repository...${RC}"
+        cd "$HOME/.local/share" || exit 1
+        git clone https://github.com/Daniel1788/dwm-gossamer.git || exit 1
+        log "Cloned dwm-gossamer repository"
+        cd dwm-gossamer || exit 1
     else
-	printf "%b\n" "${GREEN}dwm-gossamer directory already exists, updating...${RC}"
-	cd "$HOME/.local/share/dwm-gossamer" || exit 1
-	git pull || exit 1
-	log "Updated dwm-gossamer repository"
+        printf "%b\n" "${GREEN}dwm-gossamer directory already exists, updating...${RC}"
+        cd "$HOME/.local/share/dwm-gossamer" || exit 1
+        git pull || exit 1
+        log "Updated dwm-gossamer repository"
     fi
-    "$ESCALATION_TOOL" make clean install || exit 1
+
+    $ESCALATION_TOOL make clean install || exit 1
     log "DWM built and installed"
+
     cd "$HOME/.local/share/dwm-gossamer/slstatus" || exit 1
-    "$ESCALATION_TOOL" make clean install || exit 1
+    $ESCALATION_TOOL make clean install || exit 1
     log "slstatus built and installed"
+
     cd "$HOME/.local/share/dwm-gossamer" || exit 1
-    mkdir -p "$HOME/Pictures/backgrounds/"
+    mkdir -p "$HOME/Pictures/backgrounds/" || exit 1
     backup_config "$HOME/Pictures/backgrounds/background.jpg"
     cp background.jpg "$HOME/Pictures/backgrounds/"
     log "DWM background copied"
+
+    # Setup .xinitrc for startx
+    if [ ! -f "$HOME/.xinitrc" ]; then
+        {
+            printf '#!/bin/sh\n'
+            printf 'exec dbus-launch --exit-with-session dwm\n'
+        } > "$HOME/.xinitrc"
+        chmod +x "$HOME/.xinitrc"
+        printf "%b\n" "${GREEN}.xinitrc created for DWM${RC}"
+        log ".xinitrc created"
+    fi
 }
 
 install_nerd_font() {
@@ -472,19 +540,22 @@ install_nerd_font() {
     FONT_DIR="$HOME/.local/share/fonts"
     FONT_URL="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Meslo.zip"
 
-    if command_exists fc-list && fc-list | grep -qi "Meslo"; then
-        printf "%b\n" "${GREEN}Meslo Nerd-fonts are already installed.${RC}"
+    # Check if Meslo fonts are already installed
+    if command_exists fc-list && fc-list 2>/dev/null | grep -qi "Meslo"; then
+        printf "%b\n" "${GREEN}Meslo Nerd-fonts already installed. Skipping.${RC}"
+        log "Meslo fonts already installed"
         return 0
     fi
 
-    printf "%b\n" "${YELLOW}Installing Meslo Nerd-fonts${RC}"
+    printf "%b\n" "${YELLOW}Installing Meslo Nerd-fonts...${RC}"
 
+    # Check if unzip is installed
     if ! command_exists unzip; then
         printf "%b\n" "${YELLOW}Installing unzip...${RC}"
         case "$PACKAGER" in
-            pacman) "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm unzip ;;
-            xbps-install) "$ESCALATION_TOOL" "$PACKAGER" -y unzip ;;
-            apk) "$ESCALATION_TOOL" "$PACKAGER" add unzip ;;
+            pacman) $ESCALATION_TOOL "$PACKAGER" -S --needed --noconfirm unzip ;;
+            xbps-install) $ESCALATION_TOOL "$PACKAGER" -y unzip ;;
+            apk) $ESCALATION_TOOL "$PACKAGER" add unzip ;;
         esac
         if ! command_exists unzip; then
             printf "%b\n" "${RED}Failed to install unzip${RC}"
@@ -495,27 +566,24 @@ install_nerd_font() {
     mkdir -p "$FONT_DIR" || return 1
 
     TEMP_DIR=$(mktemp -d) || return 1
-    curl -sSLo "$TEMP_DIR"/"${FONT_NAME}".zip "$FONT_URL"
-    unzip "$TEMP_DIR"/"${FONT_NAME}".zip -d "$TEMP_DIR"
-    mkdir -p "$FONT_DIR"/"$FONT_NAME"
-    mv "${TEMP_DIR}"/*.ttf "$FONT_DIR"/"$FONT_NAME"
+    curl -sSLo "$TEMP_DIR/Meslo.zip" "$FONT_URL" || { rm -rf "$TEMP_DIR"; return 1; }
+    unzip -q "$TEMP_DIR/Meslo.zip" -d "$TEMP_DIR" || { rm -rf "$TEMP_DIR"; return 1; }
+    mkdir -p "$FONT_DIR/$FONT_NAME"
+    mv "$TEMP_DIR"/*.ttf "$FONT_DIR/$FONT_NAME/" 2>/dev/null || true
     fc-cache -fv
-    rm -rf "${TEMP_DIR}"
-    printf "%b\n" "${GREEN}'$FONT_NAME' installed successfully.${RC}"
+    rm -rf "$TEMP_DIR"
+    printf "%b\n" "${GREEN}Meslo Nerd-fonts installed successfully.${RC}"
+    log "Meslo fonts installed"
 }
 
 clone_config_folders() {
-    # Ensure the target directories exist
     [ ! -d ~/.config ] && mkdir -p ~/.config
     [ ! -d ~/.local/bin ] && mkdir -p ~/.local/bin
 
-    # Store the repo path in a variable for safety
     REPO_DIR="$HOME/.local/share/dwm-gossamer"
 
-    # Copy scripts to local bin
-    cp -rf "$REPO_DIR/scripts/." "$HOME/.local/bin/"
+    [ ! -d "$REPO_DIR/scripts" ] || cp -rf "$REPO_DIR/scripts/." "$HOME/.local/bin/"
 
-    # Install Polybar icon fonts
     FONT_DIR="$HOME/.local/share/fonts"
     mkdir -p "$FONT_DIR"
     if [ -d "$REPO_DIR/polybar/fonts" ]; then
@@ -524,18 +592,21 @@ clone_config_folders() {
         printf "%b\n" "${GREEN}Polybar icon fonts installed${RC}"
     fi
 
-    # Iterate over all directories in the repo's config folder
     if [ -d "$REPO_DIR/config" ]; then
-        shopt -s nullglob
         for dir in "$REPO_DIR/config/"*/; do
             dir_name=$(basename "$dir")
             backup_config "$HOME/.config/$dir_name"
             cp -r "$dir" ~/.config/
             printf "%b\n" "${GREEN}Cloned $dir_name to ~/.config/${RC}"
         done
-        shopt -u nullglob
     else
         printf "%b\n" "${RED}Config directory not found in repository${RC}"
+    fi
+
+    # Make scripts executable
+    if [ -d "$HOME/.local/bin" ]; then
+        chmod +x "$HOME/.local/bin"/* 2>/dev/null || true
+        printf "%b\n" "${GREEN}Scripts made executable${RC}"
     fi
 }
 
@@ -544,20 +615,20 @@ setupMango() {
     log "Setting up Mango WM"
     case "$PACKAGER" in
         pacman)
-            # Install Mango WM from AUR
-            "$AUR_HELPER" -S --needed --noconfirm mangowm-git
+            if [ -n "$AUR_HELPER" ]; then
+                $ESCALATION_TOOL "$AUR_HELPER" -S --needed --noconfirm mangowm-git
+            fi
 
-            # Install Wayland utilities
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm \
+            $ESCALATION_TOOL "$PACKAGER" -S --needed --noconfirm \
               foot rofi waybar swaybg wl-clip-persist cliphist wl-clipboard \
               wlsunset xfce-polkit swaync pamixer brightnessctl grim slurp satty \
               qt6-wayland xdg-desktop-portal-wlr \
-              firefox btop htop fzf bat fd eza \
-              fastfetch starship zoxide keychain man-db
+              firefox btop htop fzf bat fd eza ripgrep \
+              fastfetch starship zoxide keychain man-db \
+              dbus xauth libxdg-basedir pipewire-pulse wireplumber topgrade
             ;;
         xbps-install)
-            # Install build dependencies
-            "$ESCALATION_TOOL" "$PACKAGER" -y \
+            $ESCALATION_TOOL "$PACKAGER" -y \
               base-devel git meson ninja pkg-config cmake \
               wayland-devel wayland-protocols libinput-devel libdrm-devel \
               libxkbcommon-devel pixman-devel seatd-devel pcre2-devel \
@@ -567,49 +638,53 @@ setupMango() {
             # Build wlroots 0.19.x
             printf "%b\n" "${YELLOW}Building wlroots...${RC}"
             log "Building wlroots 0.19.x"
-            cd /tmp || exit 1
+            TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+            cd "$TEMP_BUILD_DIR" || exit 1
             git clone -b 0.19.2 https://gitlab.freedesktop.org/wlroots/wlroots.git || exit 1
             cd wlroots || exit 1
             meson build -Dprefix=/usr || exit 1
-            "$ESCALATION_TOOL" ninja -C build install || exit 1
-            cd /tmp || exit 1
-            rm -rf wlroots
+            $ESCALATION_TOOL ninja -C build install || exit 1
+            cd "$HOME" || exit 1
+            rm -rf "$TEMP_BUILD_DIR"
             log "wlroots built and installed"
 
             # Build scenefx
             printf "%b\n" "${YELLOW}Building scenefx...${RC}"
             log "Building scenefx"
+            TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+            cd "$TEMP_BUILD_DIR" || exit 1
             git clone -b 0.4.1 https://github.com/wlrfx/scenefx.git || exit 1
             cd scenefx || exit 1
             meson build -Dprefix=/usr || exit 1
-            "$ESCALATION_TOOL" ninja -C build install || exit 1
-            cd /tmp || exit 1
-            rm -rf scenefx
+            $ESCALATION_TOOL ninja -C build install || exit 1
+            cd "$HOME" || exit 1
+            rm -rf "$TEMP_BUILD_DIR"
             log "scenefx built and installed"
 
             # Build mangowm
             printf "%b\n" "${YELLOW}Building mangowm...${RC}"
             log "Building mangowm"
+            TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+            cd "$TEMP_BUILD_DIR" || exit 1
             git clone https://github.com/mangowm/mango.git || exit 1
             cd mango || exit 1
             meson build -Dprefix=/usr || exit 1
-            "$ESCALATION_TOOL" ninja -C build install || exit 1
-            cd /tmp || exit 1
-            rm -rf mango
+            $ESCALATION_TOOL ninja -C build install || exit 1
+            cd "$HOME" || exit 1
+            rm -rf "$TEMP_BUILD_DIR"
             log "mangowm built and installed"
 
-            # Install Wayland utilities
-            "$ESCALATION_TOOL" "$PACKAGER" -y \
-              foot rofi Waybar swaybg wl-clip-persist wl-clipboard cliphist \
-              wlsunset pamixer brightnessctl grim slurp satty \
-              xfce-polkit qt6-wayland xdg-desktop-portal-wlr \
-              firefox btop htop fzf bat fd eza \
-              fastfetch starship zoxide keychain man-db
+            $ESCALATION_TOOL "$PACKAGER" -y \
+              foot rofi waybar swaybg wl-clip-persist wl-clipboard cliphist \
+              wlsunset pamixer brightnessctl grim slurp \
+              qt6-wayland xdg-desktop-portal-wlr \
+              firefox btop htop fzf bat fd eza ripgrep \
+              fastfetch starship zoxide keychain man-db \
+              dbus xauth libxdg-basedir pipewire-pulse wireplumber topgrade
             log "Wayland utilities installed"
             ;;
         apk)
-            # Install build dependencies
-            "$ESCALATION_TOOL" "$PACKAGER" add \
+            $ESCALATION_TOOL "$PACKAGER" add \
               build-base git meson ninja pkg-config cmake \
               wayland-dev wayland-protocols libinput-dev libdrm-dev \
               libxkbcommon-dev pixman-dev seatd-dev pcre2-dev \
@@ -619,44 +694,49 @@ setupMango() {
             # Build wlroots 0.19.x
             printf "%b\n" "${YELLOW}Building wlroots...${RC}"
             log "Building wlroots 0.19.x"
-            cd /tmp || exit 1
+            TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+            cd "$TEMP_BUILD_DIR" || exit 1
             git clone -b 0.19.2 https://gitlab.freedesktop.org/wlroots/wlroots.git || exit 1
             cd wlroots || exit 1
             meson build -Dprefix=/usr || exit 1
-            "$ESCALATION_TOOL" ninja -C build install || exit 1
-            cd /tmp || exit 1
-            rm -rf wlroots
+            $ESCALATION_TOOL ninja -C build install || exit 1
+            cd "$HOME" || exit 1
+            rm -rf "$TEMP_BUILD_DIR"
             log "wlroots built and installed"
 
             # Build scenefx
             printf "%b\n" "${YELLOW}Building scenefx...${RC}"
             log "Building scenefx"
+            TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+            cd "$TEMP_BUILD_DIR" || exit 1
             git clone -b 0.4.1 https://github.com/wlrfx/scenefx.git || exit 1
             cd scenefx || exit 1
             meson build -Dprefix=/usr || exit 1
-            "$ESCALATION_TOOL" ninja -C build install || exit 1
-            cd /tmp || exit 1
-            rm -rf scenefx
+            $ESCALATION_TOOL ninja -C build install || exit 1
+            cd "$HOME" || exit 1
+            rm -rf "$TEMP_BUILD_DIR"
             log "scenefx built and installed"
 
             # Build mangowm
             printf "%b\n" "${YELLOW}Building mangowm...${RC}"
             log "Building mangowm"
+            TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+            cd "$TEMP_BUILD_DIR" || exit 1
             git clone https://github.com/mangowm/mango.git || exit 1
             cd mango || exit 1
             meson build -Dprefix=/usr || exit 1
-            "$ESCALATION_TOOL" ninja -C build install || exit 1
-            cd /tmp || exit 1
-            rm -rf mango
+            $ESCALATION_TOOL ninja -C build install || exit 1
+            cd "$HOME" || exit 1
+            rm -rf "$TEMP_BUILD_DIR"
             log "mangowm built and installed"
 
-            # Install Wayland utilities
-            "$ESCALATION_TOOL" "$PACKAGER" add \
-              foot rofi Waybar swaybg wl-clip-persist wl-clipboard \
+            $ESCALATION_TOOL "$PACKAGER" add \
+              foot rofi waybar swaybg wl-clip-persist wl-clipboard \
               wlsunset pamixer brightnessctl grim slurp \
               qt6-wayland \
-              firefox btop htop fzf bat fd eza \
-              fastfetch starship zoxide keychain man-db
+              firefox btop htop fzf bat fd eza ripgrep \
+              fastfetch starship zoxide keychain man-db \
+              dbus xauth libxdg-basedir pipewire-pulse wireplumber topgrade
             ;;
     esac
 }
@@ -664,21 +744,40 @@ setupMango() {
 makeMango() {
     printf "%b\n" "${YELLOW}Configuring Mango WM...${RC}"
 
-    # Create config directory
     mkdir -p ~/.config/mango
 
-    # Copy default config if not exists
     if [ ! -f ~/.config/mango/config.conf ]; then
         if [ -f /etc/mango/config.conf ]; then
             cp /etc/mango/config.conf ~/.config/mango/config.conf
             printf "%b\n" "${GREEN}Copied default Mango config${RC}"
+        else
+            # Create minimal Mango config
+            {
+                printf 'general {\n'
+                printf '  gaps_in = 5\n'
+                printf '  gaps_out = 5\n'
+                printf '}\n'
+            } > ~/.config/mango/config.conf
+            printf "%b\n" "${GREEN}Created default Mango config${RC}"
         fi
     fi
 
-    # Autostart Noctalia Shell with Mango
     if ! grep -qs 'noctalia-shell' ~/.config/mango/config.conf 2>/dev/null; then
-        printf "\n# Autostart Noctalia Shell\nexec-once=qs -d -c noctalia-shell\n" >> ~/.config/mango/config.conf
+        {
+            printf '\n# Autostart Noctalia Shell\n'
+            printf 'exec-once=qs -d -c noctalia-shell\n'
+        } >> ~/.config/mango/config.conf
         printf "%b\n" "${GREEN}Noctalia Shell configured to autostart with Mango${RC}"
+    fi
+
+    # Setup .bashrc for wayland session
+    if [ -f ~/.bashrc ]; then
+        if ! grep -q 'export WAYLAND_DISPLAY' ~/.bashrc; then
+            {
+                printf '\n# Wayland settings\n'
+                printf 'export WAYLAND_DISPLAY=wayland-1\n'
+            } >> ~/.bashrc
+        fi
     fi
 }
 
@@ -687,83 +786,77 @@ setupNoctalia() {
     log "Setting up Noctalia Shell"
     case "$PACKAGER" in
         pacman)
-            # Install Noctalia Shell from AUR
-            "$AUR_HELPER" -S --needed --noconfirm noctalia-shell
+            if [ -n "$AUR_HELPER" ]; then
+                $ESCALATION_TOOL "$AUR_HELPER" -S --needed --noconfirm noctalia-shell
+            fi
             log "Noctalia Shell installed from AUR"
 
-            # Install Noctalia dependencies
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm \
+            $ESCALATION_TOOL "$PACKAGER" -S --needed --noconfirm \
               brightnessctl imagemagick python git \
               cliphist wlsunset xdg-desktop-portal
             log "Noctalia dependencies installed"
             ;;
         xbps-install)
-            # Install dependencies
-            "$ESCALATION_TOOL" "$PACKAGER" -y \
+            $ESCALATION_TOOL "$PACKAGER" -y \
               brightnessctl imagemagick python3 git cmake ninja \
               qt6-base qt6-base-devel qt6-declarative qt6-declarative-devel \
               qt6-svg qt6-svg-devel qt6-wayland qt6-wayland-devel \
               polkit glib glib-devel xdg-desktop-portal
             log "Noctalia dependencies installed"
 
-            # Build noctalia-qs from source
             printf "%b\n" "${YELLOW}Building noctalia-qs...${RC}"
             log "Building noctalia-qs"
-            cd /tmp || exit 1
+            TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+            cd "$TEMP_BUILD_DIR" || exit 1
             git clone https://github.com/noctalia-dev/noctalia-qs.git || exit 1
             cd noctalia-qs || exit 1
             cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX=/usr || exit 1
             ninja -C build || exit 1
-            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            $ESCALATION_TOOL ninja -C build install || exit 1
             cd "$HOME" || exit 1
-            rm -rf /tmp/noctalia-qs
+            rm -rf "$TEMP_BUILD_DIR"
             log "noctalia-qs built and installed"
 
-            # Install Noctalia Shell config
             mkdir -p ~/.config/quickshell/noctalia-shell
             curl -sL https://github.com/noctalia-dev/noctalia-shell/releases/latest/download/noctalia-latest.tar.gz \
-              | tar -xz --strip-components=1 -C ~/.config/quickshell/noctalia-shell
+              | tar -xz --strip-components=1 -C ~/.config/quickshell/noctalia-shell 2>/dev/null || true
             log "Noctalia Shell config installed"
             ;;
         apk)
-            # Install dependencies
-            "$ESCALATION_TOOL" "$PACKAGER" add \
+            $ESCALATION_TOOL "$PACKAGER" add \
               brightnessctl imagemagick python3 git cmake ninja \
               qt6-base qt6-base-dev qt6-declarative qt6-declarative-dev \
               qt6-svg qt6-svg-dev qt6-wayland qt6-wayland-dev \
               polkit glib glib-dev xdg-desktop-portal
             log "Noctalia dependencies installed"
 
-            # Build noctalia-qs from source
             printf "%b\n" "${YELLOW}Building noctalia-qs...${RC}"
             log "Building noctalia-qs"
-            cd /tmp || exit 1
+            TEMP_BUILD_DIR=$(mktemp -d) || exit 1
+            cd "$TEMP_BUILD_DIR" || exit 1
             git clone https://github.com/noctalia-dev/noctalia-qs.git || exit 1
             cd noctalia-qs || exit 1
             cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_INSTALL_PREFIX=/usr || exit 1
             ninja -C build || exit 1
-            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            $ESCALATION_TOOL ninja -C build install || exit 1
             cd "$HOME" || exit 1
-            rm -rf /tmp/noctalia-qs
+            rm -rf "$TEMP_BUILD_DIR"
             log "noctalia-qs built and installed"
 
-            # Install Noctalia Shell config
             mkdir -p ~/.config/quickshell/noctalia-shell
             curl -sL https://github.com/noctalia-dev/noctalia-shell/releases/latest/download/noctalia-latest.tar.gz \
-              | tar -xz --strip-components=1 -C ~/.config/quickshell/noctalia-shell
+              | tar -xz --strip-components=1 -C ~/.config/quickshell/noctalia-shell 2>/dev/null || true
             log "Noctalia Shell config installed"
             ;;
     esac
 }
 
 cloneMangoConfig() {
-    # Ensure target directories exist
     [ ! -d ~/.config ] && mkdir -p ~/.config
     [ ! -d ~/.local/bin ] && mkdir -p ~/.local/bin
 
-    # Copy Mango config if repo exists
     MANGO_DIR="$HOME/.local/share/mango-config"
     if [ -d "$MANGO_DIR" ]; then
         if [ -d "$MANGO_DIR/config" ]; then
@@ -854,11 +947,90 @@ else
     exit 1
 fi
 
+# Verify all bashrc dependencies are installed
+printf "%b\n" "${YELLOW}Verifying bashrc dependencies...${RC}"
+MISSING_DEPS=""
+for dep in fzf bat fd eza starship zoxide keychain git curl nvim fastfetch topgrade; do
+    if ! command_exists "$dep"; then
+        MISSING_DEPS="$MISSING_DEPS $dep"
+    fi
+done
+
+if [ -n "$MISSING_DEPS" ]; then
+    printf "%b\n" "${RED}Warning: Missing bashrc dependencies:$MISSING_DEPS${RC}"
+    printf "%b\n" "${YELLOW}Installing missing dependencies...${RC}"
+    case "$PACKAGER" in
+        pacman)
+            $ESCALATION_TOOL "$PACKAGER" -S --needed --noconfirm $MISSING_DEPS
+            ;;
+        xbps-install)
+            $ESCALATION_TOOL "$PACKAGER" -y $MISSING_DEPS
+            ;;
+        apk)
+            $ESCALATION_TOOL "$PACKAGER" add $MISSING_DEPS
+            ;;
+    esac
+else
+    printf "%b\n" "${GREEN}All bashrc dependencies verified ✓${RC}"
+    log "All bashrc dependencies verified"
+fi
+
+# Setup shell configuration with bashrc from repo if available
 if [ -f .bashrc ]; then
+    # Copy bashrc from repo (it has bash-specific syntax)
     backup_config "$HOME/.bashrc"
-    cp .bashrc ~/.bashrc
-    printf "%b\n" "${CYAN}Updated ~/.bashrc from repository${RC}"
-    log "Updated ~/.bashrc from repository"
+
+    # For non-bash shells, create a compatible version
+    if [ -z "$BASH_VERSION" ]; then
+        printf "%b\n" "${CYAN}Creating POSIX-compatible bashrc...${RC}"
+        {
+            printf '# Shell configuration - POSIX compatible\n'
+            printf '[ -z "$BASH_VERSION" ] && [ -n "$ZSH_VERSION" ] && emulate sh\n'
+            printf 'export PATH="$HOME/.local/bin:$PATH"\n'
+            printf 'export XDG_DATA_HOME="$HOME/.local/share"\n'
+            printf 'export XDG_CONFIG_HOME="$HOME/.config"\n'
+            printf 'export EDITOR=nvim\n'
+            printf 'alias ls="ls --color=auto"\n'
+            printf 'alias ll="ls -lh"\n'
+            printf '[ -z "$BASH_VERSION" ] || eval "$(fzf --bash)" 2>/dev/null\n'
+            printf '[ -z "$BASH_VERSION" ] || eval "$(starship init bash)" 2>/dev/null\n'
+            printf '[ -z "$BASH_VERSION" ] || eval "$(zoxide init bash)" 2>/dev/null\n'
+        } > ~/.bashrc
+        printf "%b\n" "${CYAN}Created POSIX-compatible ~/.bashrc${RC}"
+    else
+        # Copy full bashrc for bash shell
+        cp .bashrc ~/.bashrc
+        printf "%b\n" "${CYAN}Copied full-featured ~/.bashrc from repository${RC}"
+    fi
+    log "Setup ~/.bashrc from repository"
+else
+    # Create minimal bashrc if repo version not available
+    if [ ! -f ~/.bashrc ]; then
+        {
+            printf '# Shell configuration\n'
+            printf 'export PATH="$HOME/.local/bin:$PATH"\n'
+            printf 'export XDG_DATA_HOME="$HOME/.local/share"\n'
+            printf 'export XDG_CONFIG_HOME="$HOME/.config"\n'
+            printf 'export EDITOR=nvim\n'
+            printf 'alias ls="ls --color=auto"\n'
+            printf 'alias ll="ls -lh"\n'
+            printf '[ -z "$BASH_VERSION" ] || eval "$(fzf --bash)" 2>/dev/null\n'
+            printf '[ -z "$BASH_VERSION" ] || eval "$(starship init bash)" 2>/dev/null\n'
+            printf '[ -z "$BASH_VERSION" ] || eval "$(zoxide init bash)" 2>/dev/null\n'
+        } > ~/.bashrc
+        printf "%b\n" "${CYAN}Created ~/.bashrc with essential configuration${RC}"
+        log "Created ~/.bashrc"
+    fi
+fi
+
+if [ ! -f ~/.profile ]; then
+    {
+        printf '# ~/.profile - login shell configuration\n'
+        printf 'export PATH="$HOME/.local/bin:$PATH"\n'
+        printf '[ -f ~/.bashrc ] && . ~/.bashrc\n'
+    } > ~/.profile
+    printf "%b\n" "${CYAN}Created ~/.profile for login shells${RC}"
+    log "Created ~/.profile"
 fi
 
 print_summary
