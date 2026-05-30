@@ -154,7 +154,7 @@ checkAURHelper() {
             log "AUR helper: paru (existing)"
         else
             if command_exists paru; then
-                printf "%b\n" "${YELLOW}Existing paru is broken (likely a libalpm soname mismatch after pacman update). Reinstalling...${RC}"
+                printf "%b\n" "${YELLOW}Existing paru is broken${RC}"
                 log "Existing paru broken, reinstalling"
             else
                 printf "%b\n" "${YELLOW}No AUR helper found. Installing paru...${RC}"
@@ -162,22 +162,8 @@ checkAURHelper() {
             fi
 
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm base-devel git
-            local install_dir="/tmp/paru-bin"
-            rm -rf "$install_dir"
-            git clone https://aur.archlinux.org/paru-bin.git "$install_dir" || exit 1
-            if [ "$(id -u)" = "0" ]; then
-                local build_user="${SUDO_USER:-$USER}"
-                if [ "$build_user" = "root" ]; then
-                    printf "%b\n" "${RED}Cannot build AUR packages as root. Run as a regular user with sudo access.${RC}"
-                    log "ERROR: Cannot build AUR packages as root"
-                    exit 1
-                fi
-                chown -R "$build_user": "$install_dir"
-                su - "$build_user" -c "cd '$install_dir' && makepkg --noconfirm -si" || exit 1
-            else
-                cd "$install_dir" && makepkg --noconfirm -si || exit 1
-            fi
-            cd /tmp
+            cd /opt && "$ESCALATION_TOOL" git clone https://aur.archlinux.org/paru-bin.git && "$ESCALATION_TOOL" chown -R "$USER": ./paru-bin
+            cd paru-bin && makepkg --noconfirm -si
             AUR_HELPER="paru"
             printf "%b\n" "${GREEN}Paru installed${RC}"
             log "Paru installed"
