@@ -148,28 +148,23 @@ checkPackageManager() {
 }
 
 checkAURHelper() {
-    if [ "$PACKAGER" = "pacman" ]; then
-        if command_exists paru && paru --version >/dev/null 2>&1; then
-            AUR_HELPER="paru"
-            log "AUR helper: paru (existing)"
-        else
-            if command_exists paru; then
-                printf "%b\n" "${YELLOW}Existing paru is broken${RC}"
-                log "Existing paru broken, reinstalling"
+    case "$PACKAGER" in
+        pacman)
+            if ! command_exists yay; then
+                printf "%b\n" "${YELLOW}Installing yay as AUR helper...${RC}"
+                "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm base-devel git
+                cd /opt && "$ESCALATION_TOOL" git clone https://aur.archlinux.org/yay-bin.git && "$ESCALATION_TOOL" chown -R "$USER": ./yay-bin
+                cd yay-bin && makepkg --noconfirm -si
+                printf "%b\n" "${GREEN}Yay installed${RC}"
             else
-                printf "%b\n" "${YELLOW}No AUR helper found. Installing paru...${RC}"
-                log "Installing paru AUR helper"
+                printf "%b\n" "${GREEN}Aur helper already installed${RC}"
             fi
-
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm base-devel git
-            cd /opt && "$ESCALATION_TOOL" git clone https://aur.archlinux.org/paru-bin.git && "$ESCALATION_TOOL" chown -R "$USER": ./paru-bin
-            cd paru-bin && makepkg --noconfirm -si
-            AUR_HELPER="paru"
-            printf "%b\n" "${GREEN}Paru installed${RC}"
-            log "Paru installed"
-        fi
-        printf "%b\n" "${CYAN}Using ${AUR_HELPER} for AUR packages${RC}"
-    fi
+            AUR_HELPER="yay"
+            ;;
+        *)
+            printf "%b\n" "${RED}Unsupported package manager: ""$PACKAGER""${RC}"
+            ;;
+    esac
 }
 
 checkSuperUser() {
