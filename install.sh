@@ -6,6 +6,29 @@ YELLOW='\033[33m'
 CYAN='\033[36m'
 GREEN='\033[32m'
 
+LOG_ENABLED=false
+LOG_FILE=""
+
+setup_logging() {
+    if [ -n "${INSTALL_DEBUG}" ] && [ "${INSTALL_DEBUG}" != "0" ]; then
+        LOG_ENABLED=true
+        LOG_FILE="${INSTALL_LOG_FILE:-/tmp/ethos-echo-install-$(date +%s).log}"
+        printf "%b\n" "${CYAN}Debug logging enabled. Log file: ${LOG_FILE}${RC}"
+        {
+            echo "=== Ethos-Echo Installer Debug Log ==="
+            echo "Started: $(date)"
+            echo "System: $(uname -a)"
+            echo "Command: $0 $*"
+            echo ""
+        } >> "$LOG_FILE"
+        exec > >(tee -a "$LOG_FILE") 2>&1
+    fi
+}
+
+log() {
+    [ "$LOG_ENABLED" = true ] && echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+}
+
 command_exists() {
 for cmd in "$@"; do
     command -v "$cmd" >/dev/null 2>&1 || return 1
@@ -27,10 +50,11 @@ checkArch() {
     case "$(uname -m)" in
         x86_64 | amd64) ARCH="x86_64" ;;
         aarch64 | arm64) ARCH="aarch64" ;;
-        *) printf "%b\n" "${RED}Unsupported architecture: $(uname -m)${RC}" && exit 1 ;;
+        *) printf "%b\n" "${RED}Unsupported architecture: $(uname -m)${RC}" && log "ERROR: Unsupported architecture: $(uname -m)" && exit 1 ;;
     esac
 
     printf "%b\n" "${CYAN}System architecture: ${ARCH}${RC}"
+    log "Architecture: ${ARCH}"
 }
 
 checkEscalationTool() {
@@ -40,6 +64,7 @@ checkEscalationTool() {
             ESCALATION_TOOL="eval"
             ESCALATION_TOOL_CHECKED=true
             printf "%b\n" "${CYAN}Running as root, no escalation needed${RC}"
+            log "Running as root"
             return 0
         fi
 
@@ -49,11 +74,13 @@ checkEscalationTool() {
                 ESCALATION_TOOL=${tool}
                 printf "%b\n" "${CYAN}Using ${tool} for privilege escalation${RC}"
                 ESCALATION_TOOL_CHECKED=true
+                log "Escalation tool: ${tool}"
                 return 0
             fi
         done
 
         printf "%b\n" "${RED}Can't find a supported escalation tool${RC}"
+        log "ERROR: No escalation tool found"
         exit 1
     fi
 }
@@ -76,6 +103,7 @@ checkPackageManager() {
         if command -v "${pgm}" >/dev/null 2>&1; then
             PACKAGER=${pgm}
             printf "%b\n" "${CYAN}Using ${pgm} as package manager${RC}"
+            log "Package manager: ${pgm}"
             break
         fi
     done
@@ -84,6 +112,7 @@ checkPackageManager() {
     if [ "$PACKAGER" = "apk" ] && grep -qE '^#.*community' /etc/apk/repositories; then
         "$ESCALATION_TOOL" sed -i '/community/s/^#//' /etc/apk/repositories
         "$ESCALATION_TOOL" "$PACKAGER" update
+        log "Enabled Alpine community repository"
     fi
 
     ## Enable apk testing packages
@@ -92,6 +121,7 @@ checkPackageManager() {
             "$ESCALATION_TOOL" sed -i '/testing/s/^#//' /etc/apk/repositories
             "$ESCALATION_TOOL" "$PACKAGER" update
             printf "%b\n" "${CYAN}Enabled Alpine testing repository${RC}"
+            log "Enabled Alpine testing repository"
         elif ! grep -qE '^[^#].*testing' /etc/apk/repositories; then
             local apk_version
             apk_version=$(sed -n 's|^https\?://.*alpine/\([^/]*\)/main.*|\1|p' /etc/apk/repositories | head -1)
@@ -99,6 +129,7 @@ checkPackageManager() {
                 "$ESCALATION_TOOL" tee -a /etc/apk/repositories > /dev/null <<< "https://dl-cdn.alpinelinux.org/alpine/$apk_version/testing"
                 "$ESCALATION_TOOL" "$PACKAGER" update
                 printf "%b\n" "${CYAN}Added Alpine testing repository (branch: $apk_version)${RC}"
+                log "Added Alpine testing repository (branch: ${apk_version})"
             fi
         fi
     fi
@@ -106,10 +137,12 @@ checkPackageManager() {
     ## Sync xbps repository indexes
     if [ "$PACKAGER" = "xbps-install" ]; then
         "$ESCALATION_TOOL" "$PACKAGER" -S
+        log "Synced xbps repository indexes"
     fi
 
     if [ -z "$PACKAGER" ]; then
         printf "%b\n" "${RED}Can't find a supported package manager${RC}"
+        log "ERROR: No supported package manager found"
         exit 1
     fi
 }
@@ -118,11 +151,14 @@ checkAURHelper() {
     if [ "$PACKAGER" = "pacman" ]; then
         if command_exists paru && paru --version >/dev/null 2>&1; then
             AUR_HELPER="paru"
+            log "AUR helper: paru (existing)"
         else
             if command_exists paru; then
                 printf "%b\n" "${YELLOW}Existing paru is broken (likely a libalpm soname mismatch after pacman update). Reinstalling...${RC}"
+                log "Existing paru broken, reinstalling"
             else
                 printf "%b\n" "${YELLOW}No AUR helper found. Installing paru...${RC}"
+                log "Installing paru AUR helper"
             fi
 
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm base-devel git
@@ -133,6 +169,7 @@ checkAURHelper() {
             cd /tmp
             AUR_HELPER="paru"
             printf "%b\n" "${GREEN}Paru installed${RC}"
+            log "Paru installed"
         fi
         printf "%b\n" "${CYAN}Using ${AUR_HELPER} for AUR packages${RC}"
     fi
@@ -171,6 +208,7 @@ checkEnv() {
     checkPackageManager 'apk xbps-install pacman'
     if ! command_exists curl; then
         printf "%b\n" "${YELLOW}Installing curl...${RC}"
+        log "Installing curl"
         case "$PACKAGER" in
             pacman) "$ESCALATION_TOOL" "$PACKAGER" -S --noconfirm curl ;;
             xbps-install) "$ESCALATION_TOOL" "$PACKAGER" -y curl ;;
@@ -178,13 +216,16 @@ checkEnv() {
         esac
         if ! command_exists curl; then
             printf "%b\n" "${RED}Failed to install curl${RC}"
+            log "ERROR: Failed to install curl"
             exit 1
         fi
+        log "curl installed"
     fi
     checkCommandRequirements "groups $ESCALATION_TOOL"
     checkCurrentDirectoryWritable
     checkSuperUser
     checkAURHelper
+    log "Environment check complete"
 }
 
 setupChaoticAUR() {
@@ -249,6 +290,7 @@ exec dbus-launch --exit-with-session dwm
 EOF
         "$ESCALATION_TOOL" chmod +x /etc/lemurs/wms/dwm
         printf "%b\n" "${GREEN}DWM session script created at /etc/lemurs/wms/dwm${RC}"
+    log "DWM session script created"
     elif [ "$SETUP_TYPE" = "mango" ]; then
         "$ESCALATION_TOOL" tee /etc/lemurs/wayland/mango > /dev/null <<'EOF'
 #!/bin/sh
@@ -347,6 +389,7 @@ installGhostty() {
 
 setupDWM() {
     printf "%b\n" "${YELLOW}Installing dwm-gossamer...${RC}"
+    log "Setting up DWM dependencies"
     case "$PACKAGER" in # Install pre-Requisites
         pacman)
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm \
@@ -406,24 +449,30 @@ setupDWM() {
 }
 
 makeDWM() {
+    log "Building DWM"
     [ ! -d "$HOME/.local/share" ] && mkdir -p "$HOME/.local/share/"
     if [ ! -d "$HOME/.local/share/dwm-gossamer" ]; then
 	printf "%b\n" "${YELLOW}dwm-gossamer not found, cloning repository...${RC}"
 	cd "$HOME/.local/share/" || exit 1
 	git clone https://github.com/Daniel1788/dwm-gossamer.git || exit 1
+	log "Cloned dwm-gossamer repository"
 	cd dwm-gossamer/ || exit 1
     else
 	printf "%b\n" "${GREEN}dwm-gossamer directory already exists, updating...${RC}"
 	cd "$HOME/.local/share/dwm-gossamer" || exit 1
 	git pull || exit 1
+	log "Updated dwm-gossamer repository"
     fi
     "$ESCALATION_TOOL" make clean install || exit 1
+    log "DWM built and installed"
     cd "$HOME/.local/share/dwm-gossamer/slstatus" || exit 1
     "$ESCALATION_TOOL" make clean install || exit 1
+    log "slstatus built and installed"
     cd "$HOME/.local/share/dwm-gossamer" || exit 1
     mkdir -p "$HOME/Pictures/backgrounds/"
     backup_config "$HOME/Pictures/backgrounds/background.jpg"
     cp background.jpg "$HOME/Pictures/backgrounds/"
+    log "DWM background copied"
 }
 
 install_nerd_font() {
@@ -500,6 +549,7 @@ clone_config_folders() {
 
 setupMango() {
     printf "%b\n" "${YELLOW}Installing Mango WM Noctalia Wayland setup...${RC}"
+    log "Setting up Mango WM"
     case "$PACKAGER" in
         pacman)
             # Install Mango WM from AUR
@@ -524,6 +574,7 @@ setupMango() {
 
             # Build wlroots 0.19.x
             printf "%b\n" "${YELLOW}Building wlroots...${RC}"
+            log "Building wlroots 0.19.x"
             cd /tmp || exit 1
             git clone -b 0.19.2 https://gitlab.freedesktop.org/wlroots/wlroots.git || exit 1
             cd wlroots || exit 1
@@ -531,24 +582,29 @@ setupMango() {
             "$ESCALATION_TOOL" ninja -C build install || exit 1
             cd /tmp || exit 1
             rm -rf wlroots
+            log "wlroots built and installed"
 
             # Build scenefx
             printf "%b\n" "${YELLOW}Building scenefx...${RC}"
+            log "Building scenefx"
             git clone -b 0.4.1 https://github.com/wlrfx/scenefx.git || exit 1
             cd scenefx || exit 1
             meson build -Dprefix=/usr || exit 1
             "$ESCALATION_TOOL" ninja -C build install || exit 1
             cd /tmp || exit 1
             rm -rf scenefx
+            log "scenefx built and installed"
 
             # Build mangowm
             printf "%b\n" "${YELLOW}Building mangowm...${RC}"
+            log "Building mangowm"
             git clone https://github.com/mangowm/mango.git || exit 1
             cd mango || exit 1
             meson build -Dprefix=/usr || exit 1
             "$ESCALATION_TOOL" ninja -C build install || exit 1
             cd /tmp || exit 1
             rm -rf mango
+            log "mangowm built and installed"
 
             # Install Wayland utilities
             "$ESCALATION_TOOL" "$PACKAGER" -y \
@@ -557,6 +613,7 @@ setupMango() {
               xfce-polkit qt6-wayland xdg-desktop-portal-wlr \
               firefox btop htop fzf bat fd \
               fastfetch starship zoxide man-db
+            log "Wayland utilities installed"
             ;;
         apk)
             # Install build dependencies
@@ -569,6 +626,7 @@ setupMango() {
 
             # Build wlroots 0.19.x
             printf "%b\n" "${YELLOW}Building wlroots...${RC}"
+            log "Building wlroots 0.19.x"
             cd /tmp || exit 1
             git clone -b 0.19.2 https://gitlab.freedesktop.org/wlroots/wlroots.git || exit 1
             cd wlroots || exit 1
@@ -576,24 +634,29 @@ setupMango() {
             "$ESCALATION_TOOL" ninja -C build install || exit 1
             cd /tmp || exit 1
             rm -rf wlroots
+            log "wlroots built and installed"
 
             # Build scenefx
             printf "%b\n" "${YELLOW}Building scenefx...${RC}"
+            log "Building scenefx"
             git clone -b 0.4.1 https://github.com/wlrfx/scenefx.git || exit 1
             cd scenefx || exit 1
             meson build -Dprefix=/usr || exit 1
             "$ESCALATION_TOOL" ninja -C build install || exit 1
             cd /tmp || exit 1
             rm -rf scenefx
+            log "scenefx built and installed"
 
             # Build mangowm
             printf "%b\n" "${YELLOW}Building mangowm...${RC}"
+            log "Building mangowm"
             git clone https://github.com/mangowm/mango.git || exit 1
             cd mango || exit 1
             meson build -Dprefix=/usr || exit 1
             "$ESCALATION_TOOL" ninja -C build install || exit 1
             cd /tmp || exit 1
             rm -rf mango
+            log "mangowm built and installed"
 
             # Install Wayland utilities
             "$ESCALATION_TOOL" "$PACKAGER" add \
@@ -627,15 +690,18 @@ makeMango() {
 
 setupNoctalia() {
     printf "%b\n" "${YELLOW}Installing Noctalia Shell...${RC}"
+    log "Setting up Noctalia Shell"
     case "$PACKAGER" in
         pacman)
             # Install Noctalia Shell from AUR
             "$AUR_HELPER" -S --needed --noconfirm noctalia-shell
+            log "Noctalia Shell installed from AUR"
 
             # Install Noctalia dependencies
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm \
               brightnessctl imagemagick python git \
               cliphist wlsunset xdg-desktop-portal
+            log "Noctalia dependencies installed"
             ;;
         xbps-install)
             # Install dependencies
@@ -644,9 +710,11 @@ setupNoctalia() {
               qt6-base qt6-base-devel qt6-declarative qt6-declarative-devel \
               qt6-svg qt6-svg-devel qt6-wayland qt6-wayland-devel \
               polkit glib glib-devel xdg-desktop-portal
+            log "Noctalia dependencies installed"
 
             # Build noctalia-qs from source
             printf "%b\n" "${YELLOW}Building noctalia-qs...${RC}"
+            log "Building noctalia-qs"
             cd /tmp || exit 1
             git clone https://github.com/noctalia-dev/noctalia-qs.git || exit 1
             cd noctalia-qs || exit 1
@@ -656,11 +724,13 @@ setupNoctalia() {
             "$ESCALATION_TOOL" ninja -C build install || exit 1
             cd "$HOME" || exit 1
             rm -rf /tmp/noctalia-qs
+            log "noctalia-qs built and installed"
 
             # Install Noctalia Shell config
             mkdir -p ~/.config/quickshell/noctalia-shell
             curl -sL https://github.com/noctalia-dev/noctalia-shell/releases/latest/download/noctalia-latest.tar.gz \
               | tar -xz --strip-components=1 -C ~/.config/quickshell/noctalia-shell
+            log "Noctalia Shell config installed"
             ;;
         apk)
             # Install dependencies
@@ -668,9 +738,11 @@ setupNoctalia() {
               brightnessctl imagemagick python3 git cmake ninja \
               qt6-base qt6-declarative qt6-svg qt6-wayland \
               polkit glib
+            log "Noctalia dependencies installed"
 
             # Build noctalia-qs from source
             printf "%b\n" "${YELLOW}Building noctalia-qs...${RC}"
+            log "Building noctalia-qs"
             cd /tmp || exit 1
             git clone https://github.com/noctalia-dev/noctalia-qs.git || exit 1
             cd noctalia-qs || exit 1
@@ -680,11 +752,13 @@ setupNoctalia() {
             "$ESCALATION_TOOL" ninja -C build install || exit 1
             cd "$HOME" || exit 1
             rm -rf /tmp/noctalia-qs
+            log "noctalia-qs built and installed"
 
             # Install Noctalia Shell config
             mkdir -p ~/.config/quickshell/noctalia-shell
             curl -sL https://github.com/noctalia-dev/noctalia-shell/releases/latest/download/noctalia-latest.tar.gz \
               | tar -xz --strip-components=1 -C ~/.config/quickshell/noctalia-shell
+            log "Noctalia Shell config installed"
             ;;
     esac
 }
@@ -748,25 +822,37 @@ print_summary() {
     printf "%b\n" ""
 }
 
+setup_logging
+
+log "Starting installer"
+log "Setup type: ${SETUP_TYPE:-not selected yet}"
+
 if [ -f .bashrc ]; then
     backup_config "$HOME/.bashrc"
     cp .bashrc ~/.bashrc
     printf "%b\n" "${CYAN}Updated ~/.bashrc from repository${RC}"
+    log "Updated ~/.bashrc from repository"
 fi
 
 checkEnv
+log "Environment checks passed"
 choose_setup
+log "User selected setup type: ${SETUP_TYPE}"
 setupChaoticAUR
 setupLemurs
+log "Lemurs display manager configured"
 
 if [ "$SETUP_TYPE" = "dwm" ]; then
+    log "Starting DWM setup"
     setupFlatpak
     installGhostty
     setupDWM
     makeDWM
     install_nerd_font
     clone_config_folders
+    log "DWM setup complete"
 elif [ "$SETUP_TYPE" = "mango" ]; then
+    log "Starting Mango WM setup"
     setupFlatpak
     installGhostty
     setupMango
@@ -774,9 +860,12 @@ elif [ "$SETUP_TYPE" = "mango" ]; then
     setupNoctalia
     install_nerd_font
     cloneMangoConfig
+    log "Mango WM setup complete"
 else
     printf "%b\n" "${RED}Error: No setup type selected${RC}"
+    log "ERROR: No setup type selected"
     exit 1
 fi
 
 print_summary
+log "Installer finished"
