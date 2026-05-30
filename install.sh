@@ -395,9 +395,9 @@ setupDWM() {
               xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
               firefox mate-polkit alsa-utils pavucontrol pipewire gnome-keyring \
               networkmanager network-manager-applet openssh nvim \
-              fzf bat fd \
+              fzf bat fd eza \
               ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
-              fastfetch starship zoxide man-db
+              fastfetch starship zoxide keychain man-db
             ;;
         xbps-install)
             "$ESCALATION_TOOL" "$PACKAGER" -y \
@@ -413,9 +413,9 @@ setupDWM() {
               xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
               firefox polkit xfce-polkit alsa-utils pavucontrol pipewire gnome-keyring \
               NetworkManager network-manager-applet openssh neovim \
-              fzf bat fd \
+              fzf bat fd eza \
               ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
-              fastfetch starship zoxide man-db
+              fastfetch starship zoxide keychain man-db
             ;;
         apk)
             "$ESCALATION_TOOL" "$PACKAGER" add \
@@ -429,9 +429,9 @@ setupDWM() {
               xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
               firefox polkit alsa-utils pavucontrol pipewire gnome-keyring \
               networkmanager network-manager-applet openssh neovim \
-              fzf bat fd \
+              fzf bat fd eza \
               ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
-              fastfetch starship zoxide man-db
+              fastfetch starship zoxide keychain man-db
             ;;
         *)
             printf "%b\n" "${RED}Unsupported package manager: ""$PACKAGER""${RC}"
@@ -552,8 +552,8 @@ setupMango() {
               foot rofi waybar swaybg wl-clip-persist cliphist wl-clipboard \
               wlsunset xfce-polkit swaync pamixer brightnessctl grim slurp satty \
               qt6-wayland xdg-desktop-portal-wlr \
-              firefox btop htop fzf bat fd \
-              fastfetch starship zoxide man-db
+              firefox btop htop fzf bat fd eza \
+              fastfetch starship zoxide keychain man-db
             ;;
         xbps-install)
             # Install build dependencies
@@ -603,8 +603,8 @@ setupMango() {
               foot rofi Waybar swaybg wl-clip-persist wl-clipboard cliphist \
               wlsunset pamixer brightnessctl grim slurp satty \
               xfce-polkit qt6-wayland xdg-desktop-portal-wlr \
-              firefox btop htop fzf bat fd \
-              fastfetch starship zoxide man-db
+              firefox btop htop fzf bat fd eza \
+              fastfetch starship zoxide keychain man-db
             log "Wayland utilities installed"
             ;;
         apk)
@@ -655,12 +655,8 @@ setupMango() {
               foot rofi Waybar swaybg wl-clip-persist wl-clipboard \
               wlsunset pamixer brightnessctl grim slurp \
               qt6-wayland \
-              firefox btop htop fzf bat fd \
-              fastfetch starship zoxide man-db
-            ;;
-        *)
-            printf "%b\n" "${RED}Mango WM not supported on this package manager${RC}"
-            exit 1
+              firefox btop htop fzf bat fd eza \
+              fastfetch starship zoxide keychain man-db
             ;;
     esac
 }
@@ -677,6 +673,12 @@ makeMango() {
             cp /etc/mango/config.conf ~/.config/mango/config.conf
             printf "%b\n" "${GREEN}Copied default Mango config${RC}"
         fi
+    fi
+
+    # Autostart Noctalia Shell with Mango
+    if ! grep -qs 'noctalia-shell' ~/.config/mango/config.conf 2>/dev/null; then
+        printf "\n# Autostart Noctalia Shell\nexec-once=qs -d -c noctalia-shell\n" >> ~/.config/mango/config.conf
+        printf "%b\n" "${GREEN}Noctalia Shell configured to autostart with Mango${RC}"
     fi
 }
 
@@ -801,8 +803,7 @@ print_summary() {
         printf "%b\n" "${YELLOW}Next steps:${RC}"
         printf "%b\n" "  1. ${CYAN}Reboot${RC} or run: ${GREEN}mango${RC}"
         printf "%b\n" "  2. Select ${GREEN}Mango${RC} from Lemurs login screen"
-        printf "%b\n" "  3. Noctalia should auto-start with Mango"
-        printf "%b\n" "     (if not: ${GREEN}exec noctalia-qs -c noctalia-shell${RC})"
+        printf "%b\n" "  3. Noctalia auto-starts with Mango (exec-once in config)"
     fi
     printf "%b\n" ""
     printf "%b\n" "${YELLOW}Shared components:${RC}"
@@ -819,13 +820,6 @@ setup_logging
 
 log "Starting installer"
 log "Setup type: ${SETUP_TYPE:-not selected yet}"
-
-if [ -f .bashrc ]; then
-    backup_config "$HOME/.bashrc"
-    cp .bashrc ~/.bashrc
-    printf "%b\n" "${CYAN}Updated ~/.bashrc from repository${RC}"
-    log "Updated ~/.bashrc from repository"
-fi
 
 checkEnv
 log "Environment checks passed"
@@ -858,6 +852,13 @@ else
     printf "%b\n" "${RED}Error: No setup type selected${RC}"
     log "ERROR: No setup type selected"
     exit 1
+fi
+
+if [ -f .bashrc ]; then
+    backup_config "$HOME/.bashrc"
+    cp .bashrc ~/.bashrc
+    printf "%b\n" "${CYAN}Updated ~/.bashrc from repository${RC}"
+    log "Updated ~/.bashrc from repository"
 fi
 
 print_summary
