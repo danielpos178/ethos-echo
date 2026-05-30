@@ -86,6 +86,27 @@ checkPackageManager() {
         "$ESCALATION_TOOL" "$PACKAGER" update
     fi
 
+    ## Enable apk testing packages
+    if [ "$PACKAGER" = "apk" ]; then
+        if grep -qE '^#.*testing' /etc/apk/repositories; then
+            "$ESCALATION_TOOL" sed -i '/testing/s/^#//' /etc/apk/repositories
+            "$ESCALATION_TOOL" "$PACKAGER" update
+            printf "%b\n" "${CYAN}Enabled Alpine testing repository${RC}"
+        elif ! grep -qE '^[^#].*testing' /etc/apk/repositories; then
+            local apk_version
+            apk_version=$(sed -n 's|^https\?://.*alpine/\([^/]*\)/main.*|\1|p' /etc/apk/repositories | head -1)
+            if [ -n "$apk_version" ]; then
+                "$ESCALATION_TOOL" tee -a /etc/apk/repositories > /dev/null <<< "https://dl-cdn.alpinelinux.org/alpine/$apk_version/testing"
+                "$ESCALATION_TOOL" "$PACKAGER" update
+                printf "%b\n" "${CYAN}Added Alpine testing repository (branch: $apk_version)${RC}"
+            fi
+        fi
+    fi
+
+    ## Sync xbps repository indexes
+    if [ "$PACKAGER" = "xbps-install" ]; then
+        "$ESCALATION_TOOL" "$PACKAGER" -S
+    fi
 
     if [ -z "$PACKAGER" ]; then
         printf "%b\n" "${RED}Can't find a supported package manager${RC}"
@@ -95,18 +116,22 @@ checkPackageManager() {
 
 checkAURHelper() {
     if [ "$PACKAGER" = "pacman" ]; then
-        if command_exists paru; then
+        if command_exists paru && paru --version >/dev/null 2>&1; then
             AUR_HELPER="paru"
         else
-            printf "%b\n" "${YELLOW}No AUR helper found. Installing paru...${RC}"
+            if command_exists paru; then
+                printf "%b\n" "${YELLOW}Existing paru is broken (likely a libalpm soname mismatch after pacman update). Reinstalling...${RC}"
+            else
+                printf "%b\n" "${YELLOW}No AUR helper found. Installing paru...${RC}"
+            fi
 
-            printf "%b\n" "${YELLOW}Installing paru as AUR helper...${RC}"
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm base-devel git
             local install_dir="/tmp/paru-bin"
             rm -rf "$install_dir"
             "$ESCALATION_TOOL" git clone https://aur.archlinux.org/paru-bin.git "$install_dir" && "$ESCALATION_TOOL" chown -R "$USER": "$install_dir"
-            cd "$install_dir" && makepkg --noconfirm -si
+            cd "$install_dir" && makepkg --noconfirm -si || exit 1
             cd /tmp
+            AUR_HELPER="paru"
             printf "%b\n" "${GREEN}Paru installed${RC}"
         fi
         printf "%b\n" "${CYAN}Using ${AUR_HELPER} for AUR packages${RC}"
@@ -188,7 +213,7 @@ setupLemurs() {
             "$ESCALATION_TOOL" systemctl enable lemurs.service
             ;;
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" install -y lemurs
+            "$ESCALATION_TOOL" "$PACKAGER" -y lemurs
             "$ESCALATION_TOOL" ln -sf /etc/sv/lemurs /var/service/
             "$ESCALATION_TOOL" rm -f /var/service/agetty-tty2
             ;;
@@ -264,7 +289,7 @@ setupFlatpak() {
             ;;
         xbps-install)
             # Install Flatpak
-            "$ESCALATION_TOOL" "$PACKAGER" install -y flatpak
+            "$ESCALATION_TOOL" "$PACKAGER" -y flatpak
 
             # Add Flathub repository
             "$ESCALATION_TOOL" flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
@@ -328,16 +353,18 @@ setupDWM() {
               fastfetch starship zoxide man-db
             ;;
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" install -y \
+            "$ESCALATION_TOOL" "$PACKAGER" -y \
               base-devel git linux-headers unzip curl wget \
               xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
-              libX11 libXinerama libXft libxcb imlib2 fontconfig freetype \
+              libX11 libX11-devel libXinerama libXinerama-devel libXft libXft-devel \
+              libxcb libxcb-devel imlib2 imlib2-devel fontconfig fontconfig-devel \
+              freetype freetype-devel \
               polybar picom dunst rofi dmenu slock alacritty xdo xdotool \
               feh flameshot imagemagick ffmpeg playerctl \
               btop htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
               tldr dex nwg-look xscreensaver brightnessctl acpi \
               xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
-              firefox polkit alsa-utils pavucontrol pipewire gnome-keyring \
+              firefox polkit xfce-polkit alsa-utils pavucontrol pipewire gnome-keyring \
               NetworkManager network-manager-applet openssh neovim \
               fzf bat fd \
               ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
@@ -403,7 +430,7 @@ install_nerd_font() {
         printf "%b\n" "${YELLOW}Installing unzip...${RC}"
         case "$PACKAGER" in
             pacman) "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm unzip ;;
-            xbps-install) "$ESCALATION_TOOL" "$PACKAGER" install -y unzip ;;
+            xbps-install) "$ESCALATION_TOOL" "$PACKAGER" -y unzip ;;
             apk) "$ESCALATION_TOOL" "$PACKAGER" add unzip ;;
         esac
         if ! command_exists unzip; then
@@ -476,12 +503,12 @@ setupMango() {
             ;;
         xbps-install)
             # Install build dependencies
-            "$ESCALATION_TOOL" "$PACKAGER" install -y \
+            "$ESCALATION_TOOL" "$PACKAGER" -y \
               base-devel git meson ninja pkg-config cmake \
               wayland-devel wayland-protocols libinput-devel libdrm-devel \
               libxkbcommon-devel pixman-devel seatd-devel pcre2-devel \
               libdisplay-info-devel libliftoff-devel hwdata \
-              xorg-server-xwayland libxcb-devel mesa-dri
+              xorg-server-xwayland libxcb-devel mesa-dri mesa-devel
 
             # Build wlroots 0.19.x
             printf "%b\n" "${YELLOW}Building wlroots...${RC}"
@@ -505,10 +532,10 @@ setupMango() {
             cd /tmp && rm -rf mango
 
             # Install Wayland utilities
-            "$ESCALATION_TOOL" "$PACKAGER" install -y \
-              foot rofi Waybar swaybg wl-clip-persist wl-clipboard \
-              wlsunset pamixer brightnessctl grim slurp \
-              qt6-wayland \
+            "$ESCALATION_TOOL" "$PACKAGER" -y \
+              foot rofi Waybar swaybg wl-clip-persist wl-clipboard cliphist \
+              wlsunset pamixer brightnessctl grim slurp satty \
+              xfce-polkit qt6-wayland xdg-desktop-portal-wlr \
               firefox btop htop fzf bat fd \
               fastfetch starship zoxide man-db
             ;;
@@ -586,10 +613,11 @@ setupNoctalia() {
             ;;
         xbps-install)
             # Install dependencies
-            "$ESCALATION_TOOL" "$PACKAGER" install -y \
+            "$ESCALATION_TOOL" "$PACKAGER" -y \
               brightnessctl imagemagick python3 git cmake ninja \
-              qt6-base qt6-declarative qt6-svg qt6-wayland \
-              polkit glib
+              qt6-base qt6-base-devel qt6-declarative qt6-declarative-devel \
+              qt6-svg qt6-svg-devel qt6-wayland qt6-wayland-devel \
+              polkit glib glib-devel xdg-desktop-portal
 
             # Build noctalia-qs from source
             printf "%b\n" "${YELLOW}Building noctalia-qs...${RC}"
