@@ -164,8 +164,19 @@ checkAURHelper() {
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm base-devel git
             local install_dir="/tmp/paru-bin"
             rm -rf "$install_dir"
-            "$ESCALATION_TOOL" git clone https://aur.archlinux.org/paru-bin.git "$install_dir" && "$ESCALATION_TOOL" chown -R "$USER": "$install_dir"
-            cd "$install_dir" && makepkg --noconfirm -si || exit 1
+            git clone https://aur.archlinux.org/paru-bin.git "$install_dir" || exit 1
+            if [ "$(id -u)" = "0" ]; then
+                local build_user="${SUDO_USER:-$USER}"
+                if [ "$build_user" = "root" ]; then
+                    printf "%b\n" "${RED}Cannot build AUR packages as root. Run as a regular user with sudo access.${RC}"
+                    log "ERROR: Cannot build AUR packages as root"
+                    exit 1
+                fi
+                chown -R "$build_user": "$install_dir"
+                su - "$build_user" -c "cd '$install_dir' && makepkg --noconfirm -si" || exit 1
+            else
+                cd "$install_dir" && makepkg --noconfirm -si || exit 1
+            fi
             cd /tmp
             AUR_HELPER="paru"
             printf "%b\n" "${GREEN}Paru installed${RC}"
@@ -622,7 +633,7 @@ setupMango() {
               wayland-dev wayland-protocols libinput-dev libdrm-dev \
               libxkbcommon-dev pixman-dev seatd-dev pcre2-dev \
               libdisplay-info-dev libliftoff-dev hwdata \
-              xorg-server-xwayland libxcb-dev mesa-dri
+              xorg-server-xwayland libxcb-dev mesa-dri mesa-dev
 
             # Build wlroots 0.19.x
             printf "%b\n" "${YELLOW}Building wlroots...${RC}"
@@ -736,8 +747,9 @@ setupNoctalia() {
             # Install dependencies
             "$ESCALATION_TOOL" "$PACKAGER" add \
               brightnessctl imagemagick python3 git cmake ninja \
-              qt6-base qt6-declarative qt6-svg qt6-wayland \
-              polkit glib
+              qt6-base qt6-base-dev qt6-declarative qt6-declarative-dev \
+              qt6-svg qt6-svg-dev qt6-wayland qt6-wayland-dev \
+              polkit glib glib-dev xdg-desktop-portal
             log "Noctalia dependencies installed"
 
             # Build noctalia-qs from source
