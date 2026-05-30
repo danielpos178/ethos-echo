@@ -168,8 +168,20 @@ checkCurrentDirectoryWritable() {
 checkEnv() {
     checkArch
     checkEscalationTool
-    checkCommandRequirements "curl groups $ESCALATION_TOOL"
     checkPackageManager 'apk xbps-install pacman'
+    if ! command_exists curl; then
+        printf "%b\n" "${YELLOW}Installing curl...${RC}"
+        case "$PACKAGER" in
+            pacman) "$ESCALATION_TOOL" "$PACKAGER" -S --noconfirm curl ;;
+            xbps-install) "$ESCALATION_TOOL" "$PACKAGER" -y curl ;;
+            apk) "$ESCALATION_TOOL" "$PACKAGER" add curl ;;
+        esac
+        if ! command_exists curl; then
+            printf "%b\n" "${RED}Failed to install curl${RC}"
+            exit 1
+        fi
+    fi
+    checkCommandRequirements "groups $ESCALATION_TOOL"
     checkCurrentDirectoryWritable
     checkSuperUser
     checkAURHelper
@@ -354,7 +366,7 @@ setupDWM() {
             ;;
         xbps-install)
             "$ESCALATION_TOOL" "$PACKAGER" -y \
-              base-devel git linux-headers unzip curl wget \
+              base-devel make gcc git linux-headers unzip curl wget \
               xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
               libX11 libX11-devel libXinerama libXinerama-devel libXft libXft-devel \
               libxcb libxcb-devel imlib2 imlib2-devel fontconfig fontconfig-devel \
@@ -372,7 +384,7 @@ setupDWM() {
             ;;
         apk)
             "$ESCALATION_TOOL" "$PACKAGER" add \
-              build-base git linux-headers unzip curl wget \
+              build-base make gcc git linux-headers unzip curl wget \
               xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
               libX11 libXinerama libXft libxcb imlib2 fontconfig freetype \
               polybar picom dunst rofi dmenu slock alacritty xdo xdotool \
@@ -512,24 +524,31 @@ setupMango() {
 
             # Build wlroots 0.19.x
             printf "%b\n" "${YELLOW}Building wlroots...${RC}"
-            cd /tmp && git clone -b 0.19.2 https://gitlab.freedesktop.org/wlroots/wlroots.git
-            cd wlroots && meson build -Dprefix=/usr
-            "$ESCALATION_TOOL" ninja -C build install
-            cd /tmp && rm -rf wlroots
+            cd /tmp || exit 1
+            git clone -b 0.19.2 https://gitlab.freedesktop.org/wlroots/wlroots.git || exit 1
+            cd wlroots || exit 1
+            meson build -Dprefix=/usr || exit 1
+            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            cd /tmp || exit 1
+            rm -rf wlroots
 
             # Build scenefx
             printf "%b\n" "${YELLOW}Building scenefx...${RC}"
-            cd /tmp && git clone -b 0.4.1 https://github.com/wlrfx/scenefx.git
-            cd scenefx && meson build -Dprefix=/usr
-            "$ESCALATION_TOOL" ninja -C build install
-            cd /tmp && rm -rf scenefx
+            git clone -b 0.4.1 https://github.com/wlrfx/scenefx.git || exit 1
+            cd scenefx || exit 1
+            meson build -Dprefix=/usr || exit 1
+            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            cd /tmp || exit 1
+            rm -rf scenefx
 
             # Build mangowm
             printf "%b\n" "${YELLOW}Building mangowm...${RC}"
-            cd /tmp && git clone https://github.com/mangowm/mango.git
-            cd mango && meson build -Dprefix=/usr
-            "$ESCALATION_TOOL" ninja -C build install
-            cd /tmp && rm -rf mango
+            git clone https://github.com/mangowm/mango.git || exit 1
+            cd mango || exit 1
+            meson build -Dprefix=/usr || exit 1
+            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            cd /tmp || exit 1
+            rm -rf mango
 
             # Install Wayland utilities
             "$ESCALATION_TOOL" "$PACKAGER" -y \
@@ -550,24 +569,31 @@ setupMango() {
 
             # Build wlroots 0.19.x
             printf "%b\n" "${YELLOW}Building wlroots...${RC}"
-            cd /tmp && git clone -b 0.19.2 https://gitlab.freedesktop.org/wlroots/wlroots.git
-            cd wlroots && meson build -Dprefix=/usr
-            "$ESCALATION_TOOL" ninja -C build install
-            cd /tmp && rm -rf wlroots
+            cd /tmp || exit 1
+            git clone -b 0.19.2 https://gitlab.freedesktop.org/wlroots/wlroots.git || exit 1
+            cd wlroots || exit 1
+            meson build -Dprefix=/usr || exit 1
+            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            cd /tmp || exit 1
+            rm -rf wlroots
 
             # Build scenefx
             printf "%b\n" "${YELLOW}Building scenefx...${RC}"
-            cd /tmp && git clone -b 0.4.1 https://github.com/wlrfx/scenefx.git
-            cd scenefx && meson build -Dprefix=/usr
-            "$ESCALATION_TOOL" ninja -C build install
-            cd /tmp && rm -rf scenefx
+            git clone -b 0.4.1 https://github.com/wlrfx/scenefx.git || exit 1
+            cd scenefx || exit 1
+            meson build -Dprefix=/usr || exit 1
+            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            cd /tmp || exit 1
+            rm -rf scenefx
 
             # Build mangowm
             printf "%b\n" "${YELLOW}Building mangowm...${RC}"
-            cd /tmp && git clone https://github.com/mangowm/mango.git
-            cd mango && meson build -Dprefix=/usr
-            "$ESCALATION_TOOL" ninja -C build install
-            cd /tmp && rm -rf mango
+            git clone https://github.com/mangowm/mango.git || exit 1
+            cd mango || exit 1
+            meson build -Dprefix=/usr || exit 1
+            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            cd /tmp || exit 1
+            rm -rf mango
 
             # Install Wayland utilities
             "$ESCALATION_TOOL" "$PACKAGER" add \
@@ -621,13 +647,15 @@ setupNoctalia() {
 
             # Build noctalia-qs from source
             printf "%b\n" "${YELLOW}Building noctalia-qs...${RC}"
-            cd /tmp && git clone https://github.com/noctalia-dev/noctalia-qs.git
-            cd noctalia-qs
+            cd /tmp || exit 1
+            git clone https://github.com/noctalia-dev/noctalia-qs.git || exit 1
+            cd noctalia-qs || exit 1
             cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr
-            ninja -C build
-            "$ESCALATION_TOOL" ninja -C build install
-            cd "$HOME" && rm -rf /tmp/noctalia-qs
+              -DCMAKE_INSTALL_PREFIX=/usr || exit 1
+            ninja -C build || exit 1
+            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            cd "$HOME" || exit 1
+            rm -rf /tmp/noctalia-qs
 
             # Install Noctalia Shell config
             mkdir -p ~/.config/quickshell/noctalia-shell
@@ -643,13 +671,15 @@ setupNoctalia() {
 
             # Build noctalia-qs from source
             printf "%b\n" "${YELLOW}Building noctalia-qs...${RC}"
-            cd /tmp && git clone https://github.com/noctalia-dev/noctalia-qs.git
-            cd noctalia-qs
+            cd /tmp || exit 1
+            git clone https://github.com/noctalia-dev/noctalia-qs.git || exit 1
+            cd noctalia-qs || exit 1
             cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_INSTALL_PREFIX=/usr
-            ninja -C build
-            "$ESCALATION_TOOL" ninja -C build install
-            cd "$HOME" && rm -rf /tmp/noctalia-qs
+              -DCMAKE_INSTALL_PREFIX=/usr || exit 1
+            ninja -C build || exit 1
+            "$ESCALATION_TOOL" ninja -C build install || exit 1
+            cd "$HOME" || exit 1
+            rm -rf /tmp/noctalia-qs
 
             # Install Noctalia Shell config
             mkdir -p ~/.config/quickshell/noctalia-shell
