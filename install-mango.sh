@@ -57,7 +57,8 @@ install_graphics() {
 install_core() {
     log_info "Installing core system components..."
 
-    xbps-install -y dbus seatd NetworkManager
+
+    xbps-install -y dbus elogind NetworkManager
 
     xbps-install -y pipewire wireplumber alsa-pipewire bluez libspa-bluetooth
 
@@ -80,12 +81,49 @@ install_desktop() {
     XBPS_YES=1 xbps-install -y noctalia || log_error "Failed to install noctalia."
 }
 
+setup_lemurs_service() {
+    log_info "Setting up Lemurs as a system service..."
+
+    mkdir -p /etc/sv/lemurs
+    cat <<EOF > /etc/sv/lemurs/run
+#!/bin/sh
+# Start Lemurs on tty7 (via agetty) and, best-effort, switch to tty7 during boot.
+
+if command -v fgconsole >/dev/null 2>&1 && command -v chvt >/dev/null 2>&1; then
+  cur="\$(fgconsole 2>/dev/null || echo "")"
+  if [ -n "\$cur" ] && [ "\$cur" != "serial" ] && [ "\$cur" != "7" ]; then
+    chvt 7 2>/dev/null || true
+  fi
+fi
+
+TERM=linux setterm --msg off </dev/tty7 >/dev/tty7 2>/dev/null || true
+TERM=linux setterm --clear=all </dev/tty7 >/dev/tty7 2>/dev/null || true
+
+exec agetty --noissue --skip-login --login-program /usr/bin/lemurs tty7 linux
+EOF
+    chmod +x /etc/sv/lemurs/run
+
+
+    cat <<EOF > /etc/pam.d/lemurs
+#%PAM-1.0
+auth        include    login
+account     include    login
+session     include    login
+password    include    login
+EOF
+
+    mkdir -p /etc/lemurs
+    cat <<EOF > /etc/lemurs/config.toml
+tty = 7
+EOF
+}
+
 activate_services() {
     log_info "Activating runit services..."
 
 
-    # Removed lemurs as it is a TUI binary, not a runit service
-    SERVICES="dbus seatd NetworkManager bluetoothd polkitd"
+
+    SERVICES="dbus elogind NetworkManager bluetoothd polkitd lemurs"
 
     for svc in $SERVICES;
  do
@@ -102,32 +140,10 @@ activate_services() {
 configure_user() {
     log_info "Configuring user permissions for $TARGET_USER..."
 
-    usermod -aG wheel,video,audio,bluetooth,_seatd "$TARGET_USER"
 
-    log_info "Setting up Lemurs system entry with D-Bus and Wayland environment..."
-    mkdir -p /etc/lemurs/wayland
-
-    cat <<EOF > /etc/lemurs/wayland/mangowc
-#!/bin/sh
-# XDG Environment
-export XDG_CURRENT_DESKTOP=mango
-export XDG_SESSION_TYPE=wayland
-export XDG_SESSION_DESKTOP=mango
-
-# Toolkit Wayland Backends
-export QT_QPA_PLATFORM=wayland
-export SDL_VIDEODRIVER=wayland
-export ELM_DISPLAY=wl
-
-# Start the session with a D-Bus user bus
-exec dbus-run-session mangowc
-EOF
-
-    chmod +x /etc/lemurs/wayland/mangowc
-    chown root:root /etc/lemurs/wayland/mangowc
+    usermod -aG wheel,video,audio,bluetooth "$TARGET_USER"
 
     log_info "Initializing XDG user directories..."
-
     sudo -u "$TARGET_USER" -H xdg-user-dirs-update
 }
 
@@ -163,6 +179,7 @@ main() {
     install_graphics
     install_core
     install_desktop
+    setup_lemurs_service
     configure_wm
     activate_services
     configure_user
@@ -171,7 +188,7 @@ main() {
     log_success "Installation complete!"
     printf "${BLUE}Next steps:${NC}\n"
     printf "1. Reboot your system: ${RED}sudo reboot${NC}\n"
-    printf "2. Login via Lemurs TUI: \n"
+    printf "2. The system will boot directly into the Lemurs TUI on TTY7\n"
     printf "3. Launch Mango WM and enjoy Noctalia Shell\n"
     printf "${GREEN}==================================================${NC}\n"
 }
