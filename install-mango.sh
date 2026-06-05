@@ -156,18 +156,17 @@ configure_wm() {
 # MangoWM Configuration
 
 # Audio & Session
-exec-once pipewire
-exec-once wireplumber
+exec-once = pipewire
+exec-once = wireplumber
 
 # Auth Agent
-exec-once lxqt-policykit
+exec-once = lxqt-policykit
 
 # Shell
-exec-once qs -c noctalia-shell
+exec-once = qs -c noctalia-shell
 EOF
 
-
-    chown -R "$TARGET_USER:$TARGET_USER" "/home/$TARGET_USER/.config"
+    chown -R "$TARGET_USER:$TARGET_USER" "/home/$TARGET_USER/.config/mango"
 }
 
 main() {
