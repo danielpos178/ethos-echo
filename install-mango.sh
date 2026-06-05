@@ -163,7 +163,7 @@ exec-once wireplumber
 exec-once lxqt-policykit
 
 # Shell
-exec-once noctalia
+exec-once qs -c noctalia-shell
 EOF
 
 
