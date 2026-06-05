@@ -67,7 +67,7 @@ install_core() {
 
 install_desktop() {
     log_info "Installing Session Manager and Window Manager..."
-    xbps-install -y lemurs mangowc foot nerd-fonts deffont
+    xbps-install -y lemurs mangowc foot nerd-fonts
 
     log_info "Configuring Noctalia Shell repository..."
     echo "repository=https://universalrepository.pages.dev/void" > /etc/xbps.d/10-noctalia.conf
@@ -84,7 +84,8 @@ activate_services() {
     log_info "Activating runit services..."
 
 
-    SERVICES="dbus seatd NetworkManager bluetoothd polkitd lemurs"
+    # Removed lemurs as it is a TUI binary, not a runit service
+    SERVICES="dbus seatd NetworkManager bluetoothd polkitd"
 
     for svc in $SERVICES;
  do
@@ -126,7 +127,8 @@ EOF
     chown root:root /etc/lemurs/wayland/mangowc
 
     log_info "Initializing XDG user directories..."
-    sudo -u "$TARGET_USER" xdg-user-dirs-update
+
+    sudo -u "$TARGET_USER" -H xdg-user-dirs-update
 }
 
 configure_wm() {
@@ -148,7 +150,8 @@ exec-once lxqt-policykit
 exec-once noctalia
 EOF
 
-    chown -R "$TARGET_USER:$TARGET_USER" "/home/$TARGET_USER/.config/mango"
+
+    chown -R "$TARGET_USER:$TARGET_USER" "/home/$TARGET_USER/.config"
 }
 
 main() {
