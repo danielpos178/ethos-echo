@@ -32,10 +32,8 @@ prepare_system() {
 install_graphics() {
     log_info "Detecting GPU and installing drivers..."
 
-    # Base graphics packages
     xbps-install -y linux-firmware mesa-dri vulkan-loader
 
-    # Correct package name for XWayland per Void docs
     log_info "Attempting to install XWayland for X11 compatibility..."
     xbps-install -y xorg-server-xwayland || log_info "xorg-server-xwayland not found; skipping."
 
@@ -63,15 +61,13 @@ install_core() {
 
     xbps-install -y pipewire wireplumber alsa-pipewire bluez libspa-bluetooth
 
-    # Portals, Polkit, XDG User Dirs, and Qt Wayland backends
     xbps-install -y xdg-desktop-portal-wlr polkit lxqt-policykit xdg-user-dirs qt6-wayland qt5-wayland
 }
 
 
 install_desktop() {
     log_info "Installing Session Manager and Window Manager..."
-    # Added a base font to ensure applications don't fail to render
-    xbps-install -y lemurs mangowc foot ttf-nerd-fonts-symbols deffont
+    xbps-install -y lemurs mangowc foot nerd-fonts deffont
 
     log_info "Configuring Noctalia Shell repository..."
     echo "repository=https://universalrepository.pages.dev/void" > /etc/xbps.d/10-noctalia.conf
@@ -136,10 +132,8 @@ EOF
 configure_wm() {
     log_info "Configuring Mango WM native autostart for $TARGET_USER..."
 
-    # Create the native mango config directory
     mkdir -p "/home/$TARGET_USER/.config/mango"
 
-    # Use exec-once directives in the native config file
     cat <<EOF > "/home/$TARGET_USER/.config/mango/config.conf"
 # MangoWM Configuration
 
