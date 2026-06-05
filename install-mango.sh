@@ -33,7 +33,11 @@ install_graphics() {
     log_info "Detecting GPU and installing drivers..."
 
     # Base graphics packages
-    xbps-install -y linux-firmware mesa-dri vulkan-loader xwayland
+    xbps-install -y linux-firmware mesa-dri vulkan-loader
+
+    # Correct package name for XWayland per Void docs
+    log_info "Attempting to install XWayland for X11 compatibility..."
+    xbps-install -y xorg-server-xwayland || log_info "xorg-server-xwayland not found; skipping."
 
     if lspci | grep -qi "nvidia"; then
         log_info "Nvidia GPU detected."
@@ -59,14 +63,15 @@ install_core() {
 
     xbps-install -y pipewire wireplumber alsa-pipewire bluez libspa-bluetooth
 
-
-    xbps-install -y xdg-desktop-portal-wlr polkit lxqt-policykit xdg-user-dirs
+    # Portals, Polkit, XDG User Dirs, and Qt Wayland backends
+    xbps-install -y xdg-desktop-portal-wlr polkit lxqt-policykit xdg-user-dirs qt6-wayland qt5-wayland
 }
 
 
 install_desktop() {
     log_info "Installing Session Manager and Window Manager..."
-    xbps-install -y lemurs mangowc foot ttf-nerd-fonts-symbols
+    # Added a base font to ensure applications don't fail to render
+    xbps-install -y lemurs mangowc foot ttf-nerd-fonts-symbols deffont
 
     log_info "Configuring Noctalia Shell repository..."
     echo "repository=https://universalrepository.pages.dev/void" > /etc/xbps.d/10-noctalia.conf
@@ -102,14 +107,20 @@ configure_user() {
 
     usermod -aG wheel,video,audio,bluetooth,_seatd "$TARGET_USER"
 
-    log_info "Setting up Lemurs system entry with D-Bus and XDG environment..."
+    log_info "Setting up Lemurs system entry with D-Bus and Wayland environment..."
     mkdir -p /etc/lemurs/wayland
 
     cat <<EOF > /etc/lemurs/wayland/mangowc
 #!/bin/sh
+# XDG Environment
 export XDG_CURRENT_DESKTOP=mango
 export XDG_SESSION_TYPE=wayland
 export XDG_SESSION_DESKTOP=mango
+
+# Toolkit Wayland Backends
+export QT_QPA_PLATFORM=wayland
+export SDL_VIDEODRIVER=wayland
+export ELM_DISPLAY=wl
 
 # Start the session with a D-Bus user bus
 exec dbus-run-session mangowc
