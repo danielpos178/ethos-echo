@@ -116,7 +116,6 @@ install_lemurs_pkg() {
             "$ESCALATION_TOOL" "$PACKAGER" -y lemurs || exit 1
             ;;
         pacman)
-            # Assuming lemurs is available via AUR or repo
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm lemurs || {
                 printf "%b\n" "${RED}Lemurs not found in official repos. Please install it from AUR.${RC}"
                 exit 1
@@ -132,28 +131,7 @@ install_lemurs_pkg() {
 setup_lemurs_service() {
     printf "%b\n" "${YELLOW}Setting up Lemurs as a system service...${RC}"
 
-    "$ESCALATION_TOOL" mkdir -p /etc/sv/lemurs
-
-    # Using a temporary file to avoid redirection issues with sudo
-    cat <<EOF > /tmp/lemurs_run
-#!/bin/sh
-# Start Lemurs on tty7 (via agetty) and, best-effort, switch to tty7 during boot.
-
-if command -v fgconsole >/dev/null 2>&1 && command -v chvt >/dev/null 2>&1; then
-  cur="\$(fgconsole 2>/dev/null || echo "")"
-  if [ -n "\$cur" ] && [ "\$cur" != "serial" ] && [ "\$cur" != "7" ]; then
-    chvt 7 2>/dev/null || true
-  fi
-fi
-
-TERM=linux setterm --msg off </dev/tty7 >/dev/tty7 2>/dev/null || true
-TERM=linux setterm --clear=all </dev/tty7 >/dev/tty7 2>/dev/null || true
-
-exec agetty --noissue --skip-login --login-program /usr/bin/lemurs tty7 linux
-EOF
-    "$ESCALATION_TOOL" mv /tmp/lemurs_run /etc/sv/lemurs/run
-    "$ESCALATION_TOOL" chmod +x /etc/sv/lemurs/run
-
+    # Common PAM configuration
     cat <<EOF > /tmp/lemurs_pam
 #%PAM-1.0
 auth        include    login
@@ -163,19 +141,85 @@ password    include    login
 EOF
     "$ESCALATION_TOOL" mv /tmp/lemurs_pam /etc/pam.d/lemurs
 
+    # Common Config
     "$ESCALATION_TOOL" mkdir -p /etc/lemurs
     echo "tty = 7" > /tmp/lemurs_conf
     "$ESCALATION_TOOL" mv /tmp/lemurs_conf /etc/lemurs/config.toml
+
+    if [ "$PACKAGER" = "xbps-install" ]; then
+        # Void Linux / runit
+        "$ESCALATION_TOOL" mkdir -p /etc/sv/lemurs
+        cat <<EOF > /tmp/lemurs_run
+#!/bin/sh
+if command -v fgconsole >/dev/null 2>&1 && command -v chvt >/dev/null 2>&1; then
+  cur="\$(fgconsole 2>/dev/null || echo "")"
+  if [ -n "\$cur" ] && [ "\$cur" != "serial" ] && [ "\$cur" != "7" ]; then
+    chvt 7 2>/dev/null || true
+  fi
+fi
+TERM=linux setterm --msg off </dev/tty7 >/dev/tty7 2>/dev/null || true
+TERM=linux setterm --clear=all </dev/tty7 >/dev/tty7 2>/dev/null || true
+exec agetty --noissue --skip-login --login-program /usr/bin/lemurs tty7 linux
+EOF
+        "$ESCALATION_TOOL" mv /tmp/lemurs_run /etc/sv/lemurs/run
+        "$ESCALATION_TOOL" chmod +x /etc/sv/lemurs/run
+    elif [ "$PACKAGER" = "pacman" ]; then
+        # Arch Linux / systemd
+
+        # 1. Create a wrapper script for the TTY7 switch logic
+        cat <<EOF > /tmp/lemurs-wrapper
+#!/bin/sh
+if command -v fgconsole >/dev/null 2>&1 && command -v chvt >/dev/null 2>&1; then
+  cur="\$(fgconsole 2>/dev/null || echo "")"
+  if [ -n "\$cur" ] && [ "\$cur" != "serial" ] && [ "\$cur" != "7" ]; then
+    chvt 7 2>/dev/null || true
+  fi
+fi
+TERM=linux setterm --msg off </dev/tty7 >/dev/tty7 2>/dev/null || true
+TERM=linux setterm --clear=all </dev/tty7 >/dev/tty7 2>/dev/null || true
+exec /usr/bin/agetty --noissue --skip-login --login-program /usr/bin/lemurs tty7 linux
+EOF
+        "$ESCALATION_TOOL" mkdir -p /usr/local/bin
+        "$ESCALATION_TOOL" mv /tmp/lemurs-wrapper /usr/local/bin/lemurs-wrapper
+        "$ESCALATION_TOOL" chmod +x /usr/local/bin/lemurs-wrapper
+
+        # 2. Create systemd service
+        cat <<EOF > /tmp/lemurs.service
+[Unit]
+Description=Lemurs Login Manager
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/lemurs-wrapper
+StandardInput=tty
+StandardOutput=tty
+TTYPath=/dev/tty7
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+        "$ESCALATION_TOOL" mv /tmp/lemurs.service /etc/systemd/system/lemurs.service
+
+        # 3. Mask the default getty@tty7 to avoid conflict
+        "$ESCALATION_TOOL" systemctl mask getty@tty7.service
+    fi
 }
 
 activate_lemurs_service() {
     printf "%b\n" "${YELLOW}Activating Lemurs service...${RC}"
-    if [ -d "/etc/sv/lemurs" ]; then
-        "$ESCALATION_TOOL" ln -sf "/etc/sv/lemurs" "/var/service/"
-        printf "%b\n" "${GREEN}Lemurs service enabled.${RC}"
-    else
-        printf "%b\n" "${RED}Service lemurs not found in /etc/sv/${RC}"
-        exit 1
+    if [ "$PACKAGER" = "xbps-install" ]; then
+        if [ -d "/etc/sv/lemurs" ]; then
+            "$ESCALATION_TOOL" ln -sf "/etc/sv/lemurs" "/var/service/"
+            printf "%b\n" "${GREEN}Lemurs service enabled.${RC}"
+        else
+            printf "%b\n" "${RED}Service lemurs not found in /etc/sv/${RC}"
+            exit 1
+        fi
+    elif [ "$PACKAGER" = "pacman" ]; then
+        "$ESCALATION_TOOL" systemctl daemon-reload
+        "$ESCALATION_TOOL" systemctl enable --now lemurs.service
+        printf "%b\n" "${GREEN}Lemurs systemd service enabled and started.${RC}"
     fi
 }
 

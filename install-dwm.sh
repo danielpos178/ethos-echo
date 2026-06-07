@@ -211,6 +211,7 @@ install_nerd_font() {
         mkdir -p "$FONT_DIR"/"$FONT_NAME"
         mv "${TEMP_DIR}"/*.ttf "$FONT_DIR"/"$FONT_NAME"
         fc-cache -fv
+        
         rm -rf "${TEMP_DIR}"
         printf "%b\n" "${GREEN}'$FONT_NAME' installed successfully.${RC}"
 }
@@ -243,7 +244,7 @@ clone_config_folders() {
             printf "%b\n" "${GREEN}Cloned $dir_name to ~/.config/${RC}"
         done
     else
-        printf "%b\n" "${RED}Config directory not found in repository${RC}"
+        printf "%b\n" "${RED}Config directory not found ${RC}"
     fi
 }
 

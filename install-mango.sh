@@ -6,6 +6,11 @@ YELLOW='\033[33m'
 CYAN='\033[36m'
 GREEN='\033[32m'
 
+# Utility functions
+log_info() { printf "%b\n" "${CYAN}[INFO] %s${RC}" "$1"; }
+log_success() { printf "%b\n" "${GREEN}[SUCCESS] %s${RC}" "$1"; }
+log_error() { printf "%b\n" "${RED}[ERROR] %s${RC}" "$1"; exit 1; }
+
 command_exists() {
     for cmd in "$@"; do
         command -v "$cmd" >/dev/null 2>&1 || return 1
@@ -166,16 +171,30 @@ install_desktop() {
     case "$PACKAGER" in
         xbps-install)
             "$ESCALATION_TOOL" "$PACKAGER" -y mangowc foot nerd-fonts
-            echo "repository=https://universalrepository.pages.dev/void" > /etc/xbps.d/10-noctalia.conf
-            chmod 644 /etc/xbps.d/10-noctalia.conf
+
+            log_info "Configuring Noctalia Shell repository..."
+            "$ESCALATION_TOOL" sh -c 'echo "repository=https://universalrepository.pages.dev/void" > /etc/xbps.d/10-noctalia.conf'
+            "$ESCALATION_TOOL" chmod 644 /etc/xbps.d/10-noctalia.conf
+
             XBPS_YES=1 "$ESCALATION_TOOL" "$PACKAGER" -S
             XBPS_YES=1 "$ESCALATION_TOOL" "$PACKAGER" -y noctalia
             ;;
         pacman)
-            # mangowc and noctalia are likely AUR packages. We assume the user has an AUR helper
-            # or we notify them. For the sake of the script, we try to install official ones first.
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm foot ttf-nerd-fonts-symbols
-            printf "%b\n" "${YELLOW}Please install 'mangowc' and 'noctalia' from the AUR.${RC}"
+
+            # Try to find an AUR helper
+            if command -v yay >/dev/null 2>&1; then
+                AUR_HELPER="yay"
+            elif command -v paru >/dev/null 2>&1; then
+                AUR_HELPER="paru"
+            fi
+
+            if [ -n "$AUR_HELPER" ]; then
+                log_info "AUR helper $AUR_HELPER found. Installing mangowc and noctalia..."
+                $AUR_HELPER -S --noconfirm mangowc noctalia
+            else
+                printf "%b\n" "${YELLOW}No AUR helper (yay/paru) found. Please install 'mangowc' and 'noctalia' manually from the AUR.${RC}"
+            fi
             ;;
     esac
 }

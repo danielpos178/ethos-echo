@@ -28,14 +28,7 @@ detect_distro() {
 # Privilege Escalation Detection
 check_escalation() {
     if [ "$(id -u)" = "0" ]; then
-        ESCALATOR="eval"
-    elif command -v sudo >/dev/null 2>&1; then
-        ESCALATOR="sudo"
-    elif command -v doas >/dev/null 2>&1; then
-        ESCALATOR="doas"
-    else
-        log_error "Neither sudo nor doas found. Please install one to run system installations."
-        exit 1
+        log_warn "You are running this menu as root. It is recommended to run as a normal user with sudo/doas privileges."
     fi
 }
 
@@ -49,11 +42,10 @@ update_bashrc() {
     fi
 }
 
-# Helper to run scripts with a distro check
+# Helper to run scripts
 run_install_script() {
     local script=$1
-    local is_void_specific=$2
-    local description=$3
+    local description=$2
 
     if [ ! -f "$script" ]; then
         log_error "Installation script $script not found!"
@@ -64,19 +56,10 @@ run_install_script() {
         chmod +x "$script"
     fi
 
-    if [ "$is_void_specific" = true ] && [ "$DISTRO" != "Void" ]; then
-        printf "${YELLOW}WARNING: %s is designed for Void Linux.${RC}\n" "$description"
-        printf "You are running on %s. This installation will likely fail.${RC}\n" "$DISTRO"
-        printf "Do you want to proceed anyway? (y/N): "
-        read -r confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-            log_info "Installation cancelled."
-            return 1
-        fi
-    fi
-
     log_info "Starting $description..."
-    $ESCALATOR ./"$script"
+    # We run the script as the current user because the scripts
+    # handle their own escalation for system-level tasks.
+    ./"$script"
 }
 
 show_menu() {
@@ -86,8 +69,8 @@ show_menu() {
     printf "${BOLD}${CYAN}==================================================${RC}\n"
     printf "System Detected: ${BOLD}%s${RC}\n" "$DISTRO"
     printf "--------------------------------------------------\n"
-    printf "1) ${BOLD}Install Mango WM${RC} (Setup: Core, Noctalia)\n"
-    printf "2) ${BOLD}Install DWM${RC} (Gossamer setup: Core, DWM, Configs)\n"
+    printf "1) ${BOLD}Full Mango WM Setup${RC} (Core, Lemurs, Noctalia)\n"
+    printf "2) ${BOLD}Full DWM Setup${RC} (Core, Lemurs, Gossamer)\n"
     printf "3) ${BOLD}Install Lemurs Only${RC} (Session manager setup)\n"
     printf "4) ${BOLD}Update .bashrc${RC} (Copy from repository)\n"
     printf "5) ${BOLD}Exit${RC}\n"
@@ -105,18 +88,21 @@ main() {
         read -r choice
         case $choice in
             1)
-                run_install_script "install-mango.sh" true "Mango WM"
+                # Full Mango Experience
+                run_install_script "install-lemurs.sh" "Lemurs Session Manager"
+                run_install_script "install-mango.sh" "Mango WM & Noctalia Shell"
                 printf "\nPress Enter to return to menu..."
                 read -r
                 ;;
             2)
-                # DWM script handles its own escalation and is distro-agnostic (mostly)
-                run_install_script "install-dwm.sh" false "DWM"
+                # Full DWM Experience
+                run_install_script "install-lemurs.sh" "Lemurs Session Manager"
+                run_install_script "install-dwm.sh" "DWM Gossamer"
                 printf "\nPress Enter to return to menu..."
                 read -r
                 ;;
             3)
-                run_install_script "install-lemurs.sh" true "Lemurs"
+                run_install_script "install-lemurs.sh" "Lemurs"
                 printf "\nPress Enter to return to menu..."
                 read -r
                 ;;
