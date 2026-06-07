@@ -1,0 +1,14 @@
+#!/bin/sh
+# Start Lemurs on tty7 (via agetty) and, best-effort, switch to tty7 during boot.
+
+if command -v fgconsole >/dev/null 2>&1 && command -v chvt >/dev/null 2>&1; then
+  cur="$(fgconsole 2>/dev/null || echo "")"
+  if [ -n "$cur" ] && [ "$cur" != "serial" ] && [ "$cur" != "7" ]; then
+    chvt 7 2>/dev/null || true
+  fi
+fi
+
+TERM=linux setterm --msg off </dev/tty7 >/dev/tty7 2>/dev/null || true
+TERM=linux setterm --clear=all </dev/tty7 >/dev/tty7 2>/dev/null || true
+
+exec agetty --noissue --skip-login --login-program /usr/bin/lemurs tty7 linux
