@@ -227,8 +227,13 @@ activate_services() {
 
 configure_user() {
     printf "%b\n" "${YELLOW}Configuring user permissions for $TARGET_USER...${RC}"
-    "$ESCALATION_TOOL" usermod -aG wheel,video,audio,bluetooth "$TARGET_USER"
-    sudo -u "$TARGET_USER" -H xdg-user-dirs-update
+    if [ "$ESCALATION_TOOL" = "eval" ]; then
+        usermod -aG wheel,video,audio,bluetooth "$TARGET_USER"
+        su - "$TARGET_USER" -c "xdg-user-dirs-update"
+    else
+        "$ESCALATION_TOOL" usermod -aG wheel,video,audio,bluetooth "$TARGET_USER"
+        "$ESCALATION_TOOL" -u "$TARGET_USER" xdg-user-dirs-update
+    fi
 }
 
 configure_wm() {

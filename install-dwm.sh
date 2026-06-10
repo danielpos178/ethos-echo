@@ -77,6 +77,13 @@ checkPackageManager() {
         "$ESCALATION_TOOL" "$PACKAGER" update
     fi
 
+    ## Ensure Void Linux repositories are configured
+    if [ "$PACKAGER" = "xbps-install" ] && [ ! -f /etc/xbps.d/00-repository-main.conf ]; then
+        printf "%b\n" "${YELLOW}No xbps repositories found. Configuring default Void Linux repos...${RC}"
+        "$ESCALATION_TOOL" mkdir -p /etc/xbps.d
+        "$ESCALATION_TOOL" sh -c 'echo "repository=https://repo-default.voidlinux.org/current" > /etc/xbps.d/00-repository-main.conf'
+        printf "%b\n" "${GREEN}Default Void Linux repository configured.${RC}"
+    fi
 
     if [ -z "$PACKAGER" ]; then
         printf "%b\n" "${RED}Can't find a supported package manager${RC}"
@@ -140,14 +147,14 @@ setupDWM() {
               fastfetch starship zoxide man-db
             ;;
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" -S \
+            "$ESCALATION_TOOL" "$PACKAGER" -S -y \
               base-devel git linux-headers unzip curl wget \
-              xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xprop xorg-xset xorg-xhost xf86-input-libinput \
+              xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
               libX11-devel libXinerama-devel libXft-devel libxcb-devel imlib2-devel fontconfig-devel freetype-devel \
               polybar picom dunst rofi dmenu slock alacritty xdo xdotool \
               feh flameshot imagemagick ffmpeg playerctl \
               btop htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
-              tldr dex nwg-look xscreensaver brightnessctl acpi \
+              tldr dex nwg-look xscreensaver brightnessctl acpi bluez \
               xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
               firefox polkit-gnome alsa-utils pavucontrol pipewire gnome-keyring flatpak \
               NetworkManager network-manager-applet openssh neovim \
@@ -211,7 +218,7 @@ install_nerd_font() {
         mkdir -p "$FONT_DIR"/"$FONT_NAME"
         mv "${TEMP_DIR}"/*.ttf "$FONT_DIR"/"$FONT_NAME"
         fc-cache -fv
-        
+
         rm -rf "${TEMP_DIR}"
         printf "%b\n" "${GREEN}'$FONT_NAME' installed successfully.${RC}"
 }
@@ -244,12 +251,62 @@ clone_config_folders() {
             printf "%b\n" "${GREEN}Cloned $dir_name to ~/.config/${RC}"
         done
     else
-        printf "%b\n" "${RED}Config directory not found ${RC}"
+        printf "%b\n" "${RED}Config directory not found in repository${RC}"
     fi
 }
 
-checkEnv
-setupDWM
-makeDWM
-install_nerd_font
-clone_config_folders
+activate_services() {
+    printf "%b\n" "${YELLOW}Activating core services...${RC}"
+    SERVICES="dbus NetworkManager bluetooth"
+
+    if [ "$PACKAGER" = "xbps-install" ]; then
+        # Void Linux / runit
+        for svc in $SERVICES; do
+            svc_name=$svc
+            [ "$svc" = "bluetooth" ] && svc_name="bluetoothd"
+            if [ -d "/etc/sv/$svc_name" ]; then
+                "$ESCALATION_TOOL" ln -sf "/etc/sv/$svc_name" "/var/service/"
+                printf "%b\n" "${GREEN}Enabled $svc_name${RC}"
+            fi
+        done
+    elif [ "$PACKAGER" = "pacman" ]; then
+        # Arch Linux / systemd
+        for svc in $SERVICES; do
+            svc_name=$svc
+            [ "$svc" = "bluetooth" ] && svc_name="bluetooth"
+            "$ESCALATION_TOOL" systemctl enable --now "$svc_name"
+            printf "%b\n" "${GREEN}Enabled $svc_name${RC}"
+        done
+    fi
+}
+
+configure_user() {
+    local target_user=${SUDO_USER:-$(whoami)}
+    printf "%b\n" "${YELLOW}Configuring user permissions for %s...${RC}" "$target_user"
+    if [ "$ESCALATION_TOOL" = "eval" ]; then
+        usermod -aG wheel,video,audio,bluetooth "$target_user"
+        su - "$target_user" -c "xdg-user-dirs-update"
+    else
+        "$ESCALATION_TOOL" usermod -aG wheel,video,audio,bluetooth "$target_user"
+        "$ESCALATION_TOOL" -u "$target_user" xdg-user-dirs-update
+    fi
+
+    if [ ! -f "$HOME/.xinitrc" ]; then
+        printf "%b\n" "${YELLOW}Creating ~/.xinitrc for DWM...${RC}"
+        echo "exec dwm" > "$HOME/.xinitrc"
+        printf "%b\n" "${GREEN}Created ~/.xinitrc${RC}"
+    fi
+}
+
+main() {
+    checkEnv
+    setupDWM
+    makeDWM
+    install_nerd_font
+    clone_config_folders
+    activate_services
+    configure_user
+    printf "%b\n" "${GREEN}DWM installation process complete!${RC}"
+}
+
+main "$@"

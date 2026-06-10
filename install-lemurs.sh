@@ -70,6 +70,14 @@ checkPackageManager() {
         "$ESCALATION_TOOL" "$PACKAGER" update
     fi
 
+    ## Ensure Void Linux repositories are configured
+    if [ "$PACKAGER" = "xbps-install" ] && [ ! -f /etc/xbps.d/00-repository-main.conf ]; then
+        printf "%b\n" "${YELLOW}No xbps repositories found. Configuring default Void Linux repos...${RC}"
+        "$ESCALATION_TOOL" mkdir -p /etc/xbps.d
+        "$ESCALATION_TOOL" sh -c 'echo "repository=https://repo-default.voidlinux.org/current" > /etc/xbps.d/00-repository-main.conf'
+        printf "%b\n" "${GREEN}Default Void Linux repository configured.${RC}"
+    fi
+
     if [ -z "$PACKAGER" ]; then
         printf "%b\n" "${RED}Can't find a supported package manager${RC}"
         exit 1
@@ -113,7 +121,7 @@ install_lemurs_pkg() {
     printf "%b\n" "${YELLOW}Installing Lemurs package...${RC}"
     case "$PACKAGER" in
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" -y lemurs || exit 1
+            "$ESCALATION_TOOL" "$PACKAGER" -S -y lemurs || exit 1
             ;;
         pacman)
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm lemurs || {
