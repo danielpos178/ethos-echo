@@ -6,116 +6,109 @@ YELLOW='\033[33m'
 CYAN='\033[36m'
 GREEN='\033[32m'
 
-command_exists() {
-for cmd in "$@"; do
-    command -v "$cmd" >/dev/null 2>&1 || return 1
-done
-return 0
-}
+info()  { printf "${CYAN}[INFO]${RC} %s\n" "$1"; }
+ok()    { printf "${GREEN}[OK]${RC} %s\n" "$1"; }
+warn()  { printf "${YELLOW}[WARN]${RC} %s\n" "$1"; }
+err()   { printf "${RED}[ERROR]${RC} %s\n" "$1"; }
 
+command_exists() {
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || return 1
+    done
+    return 0
+}
 
 checkArch() {
     case "$(uname -m)" in
         x86_64 | amd64) ARCH="x86_64" ;;
         aarch64 | arm64) ARCH="aarch64" ;;
-        *) printf "%b\n" "${RED}Unsupported architecture: $(uname -m)${RC}" && exit 1 ;;
+        *) err "Unsupported architecture: $(uname -m)" && exit 1 ;;
     esac
-
-    printf "%b\n" "${CYAN}System architecture: ${ARCH}${RC}"
+    info "System architecture: ${ARCH}"
 }
 
 checkEscalationTool() {
-    ## Check for escalation tools.
-    if [ -z "$ESCALATION_TOOL_CHECKED" ]; then
+    if [ -z "${ESCALATION_TOOL_CHECKED:-}" ]; then
         if [ "$(id -u)" = "0" ]; then
             ESCALATION_TOOL="eval"
             ESCALATION_TOOL_CHECKED=true
-            printf "%b\n" "${CYAN}Running as root, no escalation needed${RC}"
+            info "Running as root, no escalation needed"
             return 0
         fi
 
-        ESCALATION_TOOLS='sudo doas'
-        for tool in ${ESCALATION_TOOLS}; do
+        for tool in sudo doas; do
             if command_exists "${tool}"; then
                 ESCALATION_TOOL=${tool}
-                printf "%b\n" "${CYAN}Using ${tool} for privilege escalation${RC}"
+                info "Using ${tool} for privilege escalation"
                 ESCALATION_TOOL_CHECKED=true
                 return 0
             fi
         done
 
-        printf "%b\n" "${RED}Can't find a supported escalation tool${RC}"
+        err "Can't find a supported escalation tool (sudo/doas)"
         exit 1
     fi
 }
 
 checkCommandRequirements() {
-    ## Check for requirements.
-    REQUIREMENTS=$1
-    for req in ${REQUIREMENTS}; do
+    for req in $1; do
         if ! command_exists "${req}"; then
-            printf "%b\n" "${RED}To run me, you need: ${REQUIREMENTS}${RC}"
+            err "To run me, you need: ${req}"
             exit 1
         fi
     done
 }
 
 checkPackageManager() {
-    ## Check Package Manager
-    PACKAGEMANAGER=$1
-    for pgm in ${PACKAGEMANAGER}; do
+    for pgm in $1; do
         if command_exists "${pgm}"; then
             PACKAGER=${pgm}
-            printf "%b\n" "${CYAN}Using ${pgm} as package manager${RC}"
+            info "Using ${pgm} as package manager"
             break
         fi
     done
 
-    ## Enable apk community packages
-    if [ "$PACKAGER" = "apk" ] && grep -qE '^#.*community' /etc/apk/repositories; then
-        "$ESCALATION_TOOL" sed -i '/community/s/^#//' /etc/apk/repositories
-        "$ESCALATION_TOOL" "$PACKAGER" update
-    fi
-
-    ## Ensure Void Linux repositories are configured
     if [ "$PACKAGER" = "xbps-install" ] && [ ! -f /etc/xbps.d/00-repository-main.conf ]; then
-        printf "%b\n" "${YELLOW}No xbps repositories found. Configuring default Void Linux repos...${RC}"
+        info "Configuring default Void Linux repository..."
         "$ESCALATION_TOOL" mkdir -p /etc/xbps.d
         "$ESCALATION_TOOL" sh -c 'echo "repository=https://repo-default.voidlinux.org/current" > /etc/xbps.d/00-repository-main.conf'
-        printf "%b\n" "${GREEN}Default Void Linux repository configured.${RC}"
+        ok "Default Void Linux repository configured"
     fi
 
     if [ -z "$PACKAGER" ]; then
-        printf "%b\n" "${RED}Can't find a supported package manager${RC}"
+        err "Can't find a supported package manager (pacman/xbps-install)"
         exit 1
     fi
 }
 
 checkSuperUser() {
-    ## Check SuperUser Group
-    SUPERUSERGROUP='wheel sudo root'
-    SUGROUP=""
-    for sug in ${SUPERUSERGROUP}; do
-        if id -nG | grep -qw "${sug}"; then
+    for sug in wheel sudo root; do
+        if id -nG 2>/dev/null | grep -qw "${sug}"; then
             SUGROUP=${sug}
-            printf "%b\n" "${CYAN}Super user group ${SUGROUP}${RC}"
-            break
+            info "Super user group: ${SUGROUP}"
+            return 0
         fi
     done
-
-    if [ -z "$SUGROUP" ]; then
-        printf "%b\n" "${RED}You need to be a member of the sudo group to run me!${RC}"
-        exit 1
-    fi
+    err "You need to be a member of the sudo/wheel group to run me"
+    exit 1
 }
 
 checkCurrentDirectoryWritable() {
-    ## Check if the current directory is writable.
     GITPATH="$(dirname "$(realpath "$0")")"
     if [ ! -w "$GITPATH" ]; then
-        printf "%b\n" "${RED}Can't write to $GITPATH${RC}"
-        exit 1
+        warn "Can't write to $GITPATH — proceeding anyway"
     fi
+}
+
+detectTargetUser() {
+    if [ -n "${SUDO_USER:-}" ]; then
+        TARGET_USER="$SUDO_USER"
+    else
+        TARGET_USER="$(whoami)"
+    fi
+    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
+    [ -z "$TARGET_HOME" ] && TARGET_HOME="$HOME"
+    info "Target user: $TARGET_USER  Home: $TARGET_HOME"
 }
 
 checkEnv() {
@@ -125,176 +118,222 @@ checkEnv() {
     checkPackageManager 'pacman xbps-install'
     checkCurrentDirectoryWritable
     checkSuperUser
+    detectTargetUser
 }
 
-setupDWM() {
-    printf "%b\n" "${YELLOW}Installing dwm-gossamer dependencies...${RC}"
-    case "$PACKAGER" in # Install pre-Requisites
+# ── Resilient package installation ────────────────────────
+install_packages() {
+    local missing=0
+    case "$PACKAGER" in
         pacman)
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm \
-              base-devel git linux-headers unzip curl wget \
-              xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xprop xorg-xset xorg-xhost xf86-input-libinput \
-              libx11 libxinerama libxft libxcb imlib2 fontconfig freetype2 \
-              polybar picom dunst rofi dmenu slock alacritty xdo xdotool \
-              feh flameshot imagemagick ffmpeg playerctl \
-              btop htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
-              tldr dex nwg-look xscreensaver brightnessctl acpi \
-              xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
-              firefox polkit-gnome alsa-utils pavucontrol pipewire gnome-keyring flatpak \
-              networkmanager network-manager-applet openssh nvim \
-              fzf bat fd \
-              ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
-              fastfetch starship zoxide man-db
+            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm "$@" 2>/dev/null || {
+                warn "Batch install failed, trying individually..."
+                for pkg in "$@"; do
+                    if ! "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm "$pkg" 2>/dev/null; then
+                        warn "Package not found (skipping): $pkg"
+                        missing=1
+                    fi
+                done
+            }
             ;;
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" -S -y \
-              base-devel git linux-headers unzip curl wget \
-              xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
-              libX11-devel libXinerama-devel libXft-devel libxcb-devel imlib2-devel fontconfig-devel freetype-devel \
-              polybar picom dunst rofi dmenu slock alacritty xdo xdotool \
-              feh flameshot imagemagick ffmpeg playerctl \
-              btop htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
-              tldr dex nwg-look xscreensaver brightnessctl acpi bluez \
-              xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
-              firefox polkit-gnome alsa-utils pavucontrol pipewire gnome-keyring flatpak \
-              NetworkManager network-manager-applet openssh neovim \
-              fzf bat fd \
-              font-liberation font-dejavu font-noto font-noto-emoji font-terminus \
-              fastfetch starship zoxide man-db
+            "$ESCALATION_TOOL" "$PACKAGER" -S -y "$@" 2>/dev/null || {
+                warn "Batch install failed, trying individually..."
+                for pkg in "$@"; do
+                    if ! "$ESCALATION_TOOL" "$PACKAGER" -S -y "$pkg" 2>/dev/null; then
+                        warn "Package not found in repos (skipping): $pkg"
+                        missing=1
+                    fi
+                done
+            }
+            ;;
+    esac
+    return $missing
+}
+
+# ── Core: install build & runtime dependencies ────────────
+setupDWM() {
+    info "Installing dwm-gossamer dependencies..."
+
+    case "$PACKAGER" in
+        pacman)
+            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm \
+                base-devel git linux-headers unzip curl wget \
+                xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xprop xorg-xset xorg-xhost xf86-input-libinput \
+                libx11 libxinerama libxft libxcb imlib2 fontconfig freetype2 \
+                polybar picom dunst rofi dmenu slock alacritty xdo xdotool \
+                feh flameshot imagemagick ffmpeg playerctl \
+                btop htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
+                tldr dex nwg-look xscreensaver brightnessctl acpi \
+                xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
+                firefox polkit-gnome alsa-utils pavucontrol pipewire gnome-keyring flatpak \
+                networkmanager network-manager-applet openssh neovim \
+                fzf bat fd \
+                ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
+                fastfetch starship zoxide man-db
+            ;;
+        xbps-install)
+            install_packages \
+                base-devel git linux-headers unzip curl wget \
+                xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
+                libX11-devel libXinerama-devel libXft-devel libxcb-devel imlib2-devel fontconfig-devel freetype-devel \
+                polybar picom dunst rofi dmenu alacritty xdotool \
+                feh htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
+                ImageMagick ffmpeg playerctl \
+                tldr dex xscreensaver brightnessctl acpi bluez \
+                xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
+                firefox polkit-gnome alsa-utils pavucontrol pipewire gnome-keyring flatpak \
+                NetworkManager network-manager-applet openssh neovim \
+                fzf bat fd \
+                liberation-fonts-ttf dejavu-fonts-ttf noto-fonts-ttf noto-fonts-emoji terminus-font \
+                starship zoxide man-pages mandoc
             ;;
         *)
-            printf "%b\n" "${RED}Unsupported package manager: ""$PACKAGER""${RC}"
+            err "Unsupported package manager: $PACKAGER"
             exit 1
             ;;
     esac
+
+    ok "Dependencies installed"
 }
 
 makeDWM() {
-    [ ! -d "$HOME/.local/share" ] && mkdir -p "$HOME/.local/share/"
-    if [ ! -d "$HOME/.local/share/dwm-gossamer" ]; then
-	printf "%b\n" "${YELLOW}dwm-gossamer not found, cloning repository...${RC}"
-	cd "$HOME/.local/share/" && git clone https://github.com/Daniel1788/dwm-gossamer.git || exit 1
-	cd dwm-gossamer/ || exit 1
+    local share_dir="$TARGET_HOME/.local/share"
+    local repo_dir="$share_dir/dwm-gossamer"
+
+    mkdir -p "$share_dir"
+
+    if [ ! -d "$repo_dir" ]; then
+        info "Cloning dwm-gossamer repository..."
+        git clone https://github.com/Daniel1788/dwm-gossamer.git "$repo_dir" || {
+            err "Failed to clone repository"
+            exit 1
+        }
     else
-	printf "%b\n" "${GREEN}dwm-gossamer directory already exists, replacing..${RC}"
-	cd "$HOME/.local/share/dwm-gossamer" && git pull || exit 1
+        info "dwm-gossamer directory exists, pulling latest..."
+        git -C "$repo_dir" pull || warn "git pull failed, continuing with existing code"
     fi
-    "$ESCALATION_TOOL" make clean install
-    cd "$HOME/.local/share/dwm-gossamer/slstatus"
-    "$ESCALATION_TOOL" make clean install
-    cd "$HOME/.local/share/dwm-gossamer"
-    mkdir -p "$HOME/Pictures/backgrounds/"
-    cp background.jpg "$HOME/Pictures/backgrounds/"
+
+    info "Building dwm..."
+    "$ESCALATION_TOOL" make -C "$repo_dir" clean install || {
+        err "Failed to build dwm"
+        exit 1
+    }
+
+    info "Building slstatus..."
+    "$ESCALATION_TOOL" make -C "$repo_dir/slstatus" clean install || {
+        warn "Failed to build slstatus"
+    }
+
+    mkdir -p "$TARGET_HOME/Pictures/backgrounds/"
+    if [ -f "$repo_dir/background.jpg" ]; then
+        cp "$repo_dir/background.jpg" "$TARGET_HOME/Pictures/backgrounds/"
+    fi
 }
 
 install_nerd_font() {
-    # Check to see if the MesloLGS Nerd Font is installed (Change this to whatever font you would like)
     FONT_NAME="MesloLGS Nerd Font Mono"
-    FONT_DIR="$HOME/.local/share/fonts"
+    FONT_DIR="$TARGET_HOME/.local/share/fonts"
     FONT_URL="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Meslo.zip"
-    FONT_INSTALLED=$(fc-list | grep -i "Meslo")
 
-    if [ -n "$FONT_INSTALLED" ]; then
-        printf "%b\n" "${GREEN}Meslo Nerd-fonts are already installed.${RC}"
+    if fc-list 2>/dev/null | grep -qi "Meslo"; then
+        ok "Meslo Nerd-fonts already installed"
         return 0
     fi
 
-    printf "%b\n" "${YELLOW}Installing Meslo Nerd-fonts${RC}"
-
-    # Create the fonts directory if it doesn't exist
-    if [ ! -d "$FONT_DIR" ]; then
-        mkdir -p "$FONT_DIR" || {
-            printf "%b\n" "${RED}Failed to create directory: $FONT_DIR${RC}"
-            return 1
-        }
-    fi
-        printf "%b\n" "${YELLOW}Installing font '$FONT_NAME'${RC}"
-        # Change this URL to correspond with the correct font
-        FONT_URL="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Meslo.zip"
-        FONT_DIR="$HOME/.local/share/fonts"
-        TEMP_DIR=$(mktemp -d)
-        curl -sSLo "$TEMP_DIR"/"${FONT_NAME}".zip "$FONT_URL"
-        unzip "$TEMP_DIR"/"${FONT_NAME}".zip -d "$TEMP_DIR"
-        mkdir -p "$FONT_DIR"/"$FONT_NAME"
-        mv "${TEMP_DIR}"/*.ttf "$FONT_DIR"/"$FONT_NAME"
-        fc-cache -fv
-
-        rm -rf "${TEMP_DIR}"
-        printf "%b\n" "${GREEN}'$FONT_NAME' installed successfully.${RC}"
+    info "Installing Meslo Nerd-fonts..."
+    mkdir -p "$FONT_DIR"
+    TEMP_DIR=$(mktemp -d)
+    curl -sSLo "$TEMP_DIR/Meslo.zip" "$FONT_URL"
+    unzip -q "$TEMP_DIR/Meslo.zip" -d "$TEMP_DIR"
+    mkdir -p "$FONT_DIR/$FONT_NAME"
+    mv "$TEMP_DIR"/*.ttf "$FONT_DIR/$FONT_NAME/"
+    fc-cache -fv
+    rm -rf "$TEMP_DIR"
+    ok "Meslo Nerd-fonts installed"
 }
 
 clone_config_folders() {
-    # Ensure the target directories exist
-    [ ! -d ~/.config ] && mkdir -p ~/.config
-    [ ! -d ~/.local/bin ] && mkdir -p ~/.local/bin
+    local repo_dir="$TARGET_HOME/.local/share/dwm-gossamer"
 
-    # Store the repo path in a variable for safety
-    REPO_DIR="$HOME/.local/share/dwm-gossamer"
+    mkdir -p "$TARGET_HOME/.config"
+    mkdir -p "$TARGET_HOME/.local/bin"
 
-    # Copy scripts to local bin
-    cp -rf "$REPO_DIR/scripts/." "$HOME/.local/bin/"
-
-    # Install Polybar icon fonts
-    FONT_DIR="$HOME/.local/share/fonts"
-    mkdir -p "$FONT_DIR"
-    if [ -d "$REPO_DIR/polybar/fonts" ]; then
-        cp -r "$REPO_DIR/polybar/fonts/"* "$FONT_DIR/"
-        fc-cache -fv
-        printf "%b\n" "${GREEN}Polybar icon fonts installed${RC}"
+    if [ -d "$repo_dir/scripts" ]; then
+        cp -rf "$repo_dir/scripts/." "$TARGET_HOME/.local/bin/"
+        ok "Scripts copied to ~/.local/bin"
     fi
 
-    # Iterate over all directories in the repo's config folder
-    if [ -d "$REPO_DIR/config" ]; then
-        for dir in "$REPO_DIR/config/"*/; do
+    mkdir -p "$TARGET_HOME/.local/share/fonts"
+    if [ -d "$repo_dir/polybar/fonts" ]; then
+        cp -r "$repo_dir/polybar/fonts/"* "$TARGET_HOME/.local/share/fonts/"
+        fc-cache -fv
+        ok "Polybar icon fonts installed"
+    fi
+
+    if [ -d "$repo_dir/config" ]; then
+        for dir in "$repo_dir/config/"*/; do
+            [ -d "$dir" ] || continue
             dir_name=$(basename "$dir")
-            cp -r "$dir" ~/.config/
-            printf "%b\n" "${GREEN}Cloned $dir_name to ~/.config/${RC}"
+            cp -r "$dir" "$TARGET_HOME/.config/"
+            ok "Cloned $dir_name to ~/.config/"
         done
     else
-        printf "%b\n" "${RED}Config directory not found in repository${RC}"
+        warn "Config directory not found in repository"
     fi
 }
 
 activate_services() {
-    printf "%b\n" "${YELLOW}Activating core services...${RC}"
-    SERVICES="dbus NetworkManager bluetooth"
+    info "Activating core services..."
 
-    if [ "$PACKAGER" = "xbps-install" ]; then
-        # Void Linux / runit
-        for svc in $SERVICES; do
-            svc_name=$svc
-            [ "$svc" = "bluetooth" ] && svc_name="bluetoothd"
-            if [ -d "/etc/sv/$svc_name" ]; then
-                "$ESCALATION_TOOL" ln -sf "/etc/sv/$svc_name" "/var/service/"
-                printf "%b\n" "${GREEN}Enabled $svc_name${RC}"
-            fi
-        done
-    elif [ "$PACKAGER" = "pacman" ]; then
-        # Arch Linux / systemd
-        for svc in $SERVICES; do
-            svc_name=$svc
-            [ "$svc" = "bluetooth" ] && svc_name="bluetooth"
-            "$ESCALATION_TOOL" systemctl enable --now "$svc_name"
-            printf "%b\n" "${GREEN}Enabled $svc_name${RC}"
-        done
-    fi
+    case "$PACKAGER" in
+        pacman)
+            install_packages dbus networkmanager bluez
+            for svc in dbus NetworkManager bluetooth; do
+                "$ESCALATION_TOOL" systemctl enable --now "$svc" 2>/dev/null && ok "Enabled $svc" || warn "Failed to enable $svc"
+            done
+            ;;
+        xbps-install)
+            install_packages dbus NetworkManager bluez
+            for svc in dbus NetworkManager bluetoothd; do
+                if [ -d "/etc/sv/$svc" ]; then
+                    if [ ! -L "/var/service/$svc" ]; then
+                        "$ESCALATION_TOOL" ln -sf "/etc/sv/$svc" "/var/service/"
+                        ok "Enabled $svc"
+                    else
+                        ok "$svc already enabled"
+                    fi
+                else
+                    warn "Service $svc not found in /etc/sv/ — is the package installed?"
+                fi
+            done
+            ;;
+    esac
 }
 
 configure_user() {
-    local target_user=${SUDO_USER:-$(whoami)}
-    printf "%b\n" "${YELLOW}Configuring user permissions for %s...${RC}" "$target_user"
+    local groups="wheel,video,audio"
+    getent group bluetooth &>/dev/null && groups="$groups,bluetooth"
+
+    info "Adding $TARGET_USER to groups: $groups"
     if [ "$ESCALATION_TOOL" = "eval" ]; then
-        usermod -aG wheel,video,audio,bluetooth "$target_user"
-        su - "$target_user" -c "xdg-user-dirs-update"
+        usermod -aG "$groups" "$TARGET_USER" 2>/dev/null || warn "Failed to modify groups (running as root directly)"
     else
-        "$ESCALATION_TOOL" usermod -aG wheel,video,audio,bluetooth "$target_user"
-        "$ESCALATION_TOOL" -u "$target_user" xdg-user-dirs-update
+        "$ESCALATION_TOOL" usermod -aG "$groups" "$TARGET_USER" 2>/dev/null || warn "Failed to modify groups"
     fi
 
-    if [ ! -f "$HOME/.xinitrc" ]; then
-        printf "%b\n" "${YELLOW}Creating ~/.xinitrc for DWM...${RC}"
-        echo "exec dwm" > "$HOME/.xinitrc"
-        printf "%b\n" "${GREEN}Created ~/.xinitrc${RC}"
+    if command_exists xdg-user-dirs-update; then
+        if [ "$ESCALATION_TOOL" = "eval" ]; then
+            su - "$TARGET_USER" -c "xdg-user-dirs-update" 2>/dev/null || true
+        else
+            "$ESCALATION_TOOL" -u "$TARGET_USER" xdg-user-dirs-update 2>/dev/null || true
+        fi
+    fi
+
+    if [ ! -f "$TARGET_HOME/.xinitrc" ]; then
+        info "Creating ~/.xinitrc for DWM..."
+        echo "exec dwm" > "$TARGET_HOME/.xinitrc"
+        ok "Created ~/.xinitrc"
     fi
 }
 
@@ -306,7 +345,11 @@ main() {
     clone_config_folders
     activate_services
     configure_user
-    printf "%b\n" "${GREEN}DWM installation process complete!${RC}"
+    echo ""
+    ok "DWM installation process complete!"
+    echo ""
+    info "Log out and select DWM from your display manager, or run: startx"
+    echo ""
 }
 
 main "$@"
