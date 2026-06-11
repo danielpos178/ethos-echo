@@ -96,7 +96,8 @@ checkSuperUser() {
 checkCurrentDirectoryWritable() {
     GITPATH="$(dirname "$(realpath "$0")")"
     if [ ! -w "$GITPATH" ]; then
-        warn "Can't write to $GITPATH - proceeding anyway"
+        err "Can't write to $GITPATH"
+        exit 1
     fi
 }
 
@@ -125,13 +126,13 @@ install_lemurs_pkg() {
     info "Installing Lemurs package..."
     case "$PACKAGER" in
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" -S -y lemurs || {
-                err "Failed to install lemurs package"
+            "$ESCALATION_TOOL" "$PACKAGER" -S -y lemurs xinit || {
+                err "Failed to install lemurs/xinit packages"
                 exit 1
             }
             ;;
         pacman)
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm lemurs || {
+            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm lemurs xorg-xinit || {
                 err "Lemurs not found in official repos. Install it from AUR."
                 exit 1
             }
@@ -141,7 +142,7 @@ install_lemurs_pkg() {
             exit 1
             ;;
     esac
-    ok "Lemurs package installed"
+    ok "Lemurs and xinit packages installed"
 }
 
 setup_lemurs_service() {
@@ -150,14 +151,15 @@ setup_lemurs_service() {
     # ── PAM configuration ────────────────────────────────
     # Use explicit PAM modules instead of "include login" for reliable
     # credential dropping on both Arch and Void.
+    "$ESCALATION_TOOL" mkdir -p /etc/pam.d
     cat <<EOF > /tmp/lemurs_pam
 #%PAM-1.0
 auth        required      pam_unix.so
-auth        required      pam_nologin.so
 account     required      pam_unix.so
+account     required      pam_nologin.so
 password    required      pam_unix.so
 session     required      pam_unix.so
-session     required      pam_loginuid.so
+session     optional      pam_loginuid.so
 session     optional      pam_limits.so
 EOF
     "$ESCALATION_TOOL" mv /tmp/lemurs_pam /etc/pam.d/lemurs

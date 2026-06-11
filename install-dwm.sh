@@ -121,7 +121,6 @@ checkEnv() {
     detectTargetUser
 }
 
-# ── Resilient package installation ────────────────────────
 install_packages() {
     local missing=0
     case "$PACKAGER" in
@@ -151,13 +150,12 @@ install_packages() {
     return $missing
 }
 
-# ── Core: install build & runtime dependencies ────────────
 setupDWM() {
     info "Installing dwm-gossamer dependencies..."
 
     case "$PACKAGER" in
         pacman)
-            "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm \
+        	install_packages \
                 base-devel git linux-headers unzip curl wget \
                 xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xprop xorg-xset xorg-xhost xf86-input-libinput \
                 libx11 libxinerama libxft libxcb imlib2 fontconfig freetype2 \
@@ -175,12 +173,10 @@ setupDWM() {
             info "Installing daily-use apps..."
             install_packages \
                 qalculate-gtk mpv \
-                zathura zathura-pdf-mupdf keepassxc \
-                copyq blueman imv gimp \
-                sxiv ffmpegthumbnailer poppler
-
-            info "Installing optional apps (zed, zen-browser) — may be skipped if not in repos..."
-            install_packages zed zen-browser
+                zathura zathura-pdf-mupdf \
+                copyq blueman gimp \
+                ffmpegthumbnailer poppler
+                
             ;;
         xbps-install)
             install_packages \
@@ -202,12 +198,9 @@ setupDWM() {
             info "Installing daily-use apps..."
             install_packages \
                 qalculate-gtk mpv \
-                zathura zathura-pdf-mupdf keepassxc \
+                zathura zathura-pdf-mupdf \
                 copyq blueman imv gimp \
-                sxiv ffmpegthumbnailer poppler
-
-            info "Installing optional apps (zed, zen-browser) — may be skipped if not in repos..."
-            install_packages zed zen-browser
+                ffmpegthumbnailer poppler
             ;;
         *)
             err "Unsupported package manager: $PACKAGER"
@@ -243,13 +236,37 @@ makeDWM() {
 
     info "Building slstatus..."
     "$ESCALATION_TOOL" make -C "$repo_dir/slstatus" clean install || {
-        warn "Failed to build slstatus"
+        err "Failed to build slstatus"
     }
 
     mkdir -p "$TARGET_HOME/Pictures/backgrounds/"
     if [ -f "$repo_dir/background.jpg" ]; then
         cp "$repo_dir/background.jpg" "$TARGET_HOME/Pictures/backgrounds/"
     fi
+}
+
+setup_flatpak() {
+    if ! command_exists flatpak; then
+        warn "flatpak not found, skipping Flatpak setup"
+        return 1
+    fi
+
+    info "Configuring Flathub remote..."
+    "$ESCALATION_TOOL" flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null
+    ok "Flathub remote configured"
+}
+
+install_flatpak_apps() {
+    if ! command_exists flatpak; then
+        warn "flatpak not found, skipping Flatpak app installations"
+        return 1
+    fi
+
+    info "Installing Zen Browser via Flatpak..."
+    "$ESCALATION_TOOL" flatpak install -y flathub io.github.zen_browser.zen 2>/dev/null && ok "Zen Browser installed" || warn "Failed to install Zen Browser"
+
+    info "Installing Zed Editor via Flatpak..."
+    "$ESCALATION_TOOL" flatpak install -y flathub dev.zed.Zed 2>/dev/null && ok "Zed Editor installed" || warn "Failed to install Zed Editor"
 }
 
 install_nerd_font() {
@@ -325,7 +342,7 @@ activate_services() {
                         ok "$svc already enabled"
                     fi
                 else
-                    warn "Service $svc not found in /etc/sv/ — is the package installed?"
+                    warn "Service $svc not found in /etc/sv/"
                 fi
             done
             ;;
@@ -356,7 +373,6 @@ configure_user() {
     printf '%s\n' \
         '#!/bin/sh' \
         '' \
-        '# Set a nice wallpaper if possible' \
         '[ -f "$HOME/Pictures/backgrounds/background.jpg" ] && feh --bg-fill "$HOME/Pictures/backgrounds/background.jpg" 2>/dev/null &' \
         '' \
         'exec dwm' > "$TARGET_HOME/.xinitrc"
@@ -368,6 +384,8 @@ main() {
     setupDWM
     makeDWM
     install_nerd_font
+    setup_flatpak
+    install_flatpak_apps
     clone_config_folders
     activate_services
     configure_user
