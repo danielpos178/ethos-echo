@@ -1,1 +1,2 @@
 tty = 7
+command = "startx"

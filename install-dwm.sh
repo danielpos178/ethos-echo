@@ -171,12 +171,23 @@ setupDWM() {
                 fzf bat fd \
                 ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
                 fastfetch starship zoxide man-db
+
+            info "Installing daily-use apps..."
+            install_packages \
+                qalculate-gtk mpv \
+                zathura zathura-pdf-mupdf keepassxc \
+                copyq blueman imv gimp \
+                sxiv ffmpegthumbnailer poppler
+
+            info "Installing optional apps (zed, zen-browser) — may be skipped if not in repos..."
+            install_packages zed zen-browser
             ;;
         xbps-install)
             install_packages \
                 base-devel git linux-headers unzip curl wget \
                 xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
                 libX11-devel libXinerama-devel libXft-devel libxcb-devel imlib2-devel fontconfig-devel freetype-devel \
+                mesa xf86-video-nouveau \
                 polybar picom dunst rofi dmenu alacritty xdotool \
                 feh htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
                 ImageMagick ffmpeg playerctl \
@@ -187,6 +198,16 @@ setupDWM() {
                 fzf bat fd \
                 liberation-fonts-ttf dejavu-fonts-ttf noto-fonts-ttf noto-fonts-emoji terminus-font \
                 starship zoxide man-pages mandoc
+
+            info "Installing daily-use apps..."
+            install_packages \
+                qalculate-gtk mpv \
+                zathura zathura-pdf-mupdf keepassxc \
+                copyq blueman imv gimp \
+                sxiv ffmpegthumbnailer poppler
+
+            info "Installing optional apps (zed, zen-browser) — may be skipped if not in repos..."
+            install_packages zed zen-browser
             ;;
         *)
             err "Unsupported package manager: $PACKAGER"
@@ -314,6 +335,7 @@ activate_services() {
 configure_user() {
     local groups="wheel,video,audio"
     getent group bluetooth &>/dev/null && groups="$groups,bluetooth"
+    getent group input &>/dev/null && groups="$groups,input"
 
     info "Adding $TARGET_USER to groups: $groups"
     if [ "$ESCALATION_TOOL" = "eval" ]; then
@@ -330,11 +352,15 @@ configure_user() {
         fi
     fi
 
-    if [ ! -f "$TARGET_HOME/.xinitrc" ]; then
-        info "Creating ~/.xinitrc for DWM..."
-        echo "exec dwm" > "$TARGET_HOME/.xinitrc"
-        ok "Created ~/.xinitrc"
-    fi
+    info "Setting up ~/.xinitrc for DWM..."
+    printf '%s\n' \
+        '#!/bin/sh' \
+        '' \
+        '# Set a nice wallpaper if possible' \
+        '[ -f "$HOME/Pictures/backgrounds/background.jpg" ] && feh --bg-fill "$HOME/Pictures/backgrounds/background.jpg" 2>/dev/null &' \
+        '' \
+        'exec dwm' > "$TARGET_HOME/.xinitrc"
+    ok "Created ~/.xinitrc"
 }
 
 main() {

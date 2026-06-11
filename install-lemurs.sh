@@ -6,6 +6,11 @@ YELLOW='\033[33m'
 CYAN='\033[36m'
 GREEN='\033[32m'
 
+info()  { printf "${CYAN}[INFO]${RC} %s\n" "$1"; }
+ok()    { printf "${GREEN}[OK]${RC} %s\n" "$1"; }
+warn()  { printf "${YELLOW}[WARN]${RC} %s\n" "$1"; }
+err()   { printf "${RED}[ERROR]${RC} %s\n" "$1"; }
+
 command_exists() {
     for cmd in "$@"; do
         command -v "$cmd" >/dev/null 2>&1 || return 1
@@ -17,95 +22,93 @@ checkArch() {
     case "$(uname -m)" in
         x86_64 | amd64) ARCH="x86_64" ;;
         aarch64 | arm64) ARCH="aarch64" ;;
-        *) printf "%b\n" "${RED}Unsupported architecture: $(uname -m)${RC}" && exit 1 ;;
+        *) err "Unsupported architecture: $(uname -m)" && exit 1 ;;
     esac
-    printf "%b\n" "${CYAN}System architecture: ${ARCH}${RC}"
+    info "System architecture: ${ARCH}"
 }
 
 checkEscalationTool() {
-    if [ -z "$ESCALATION_TOOL_CHECKED" ]; then
+    if [ -z "${ESCALATION_TOOL_CHECKED:-}" ]; then
         if [ "$(id -u)" = "0" ]; then
             ESCALATION_TOOL="eval"
             ESCALATION_TOOL_CHECKED=true
-            printf "%b\n" "${CYAN}Running as root, no escalation needed${RC}"
+            info "Running as root, no escalation needed"
             return 0
         fi
 
-        ESCALATION_TOOLS='sudo doas'
-        for tool in ${ESCALATION_TOOLS}; do
+        for tool in sudo doas; do
             if command_exists "${tool}"; then
                 ESCALATION_TOOL=${tool}
-                printf "%b\n" "${CYAN}Using ${tool} for privilege escalation${RC}"
+                info "Using ${tool} for privilege escalation"
                 ESCALATION_TOOL_CHECKED=true
                 return 0
             fi
         done
-        printf "%b\n" "${RED}Can't find a supported escalation tool${RC}"
+
+        err "Can't find a supported escalation tool (sudo/doas)"
         exit 1
     fi
 }
 
 checkCommandRequirements() {
-    REQUIREMENTS=$1
-    for req in ${REQUIREMENTS}; do
+    for req in $1; do
         if ! command_exists "${req}"; then
-            printf "%b\n" "${RED}To run me, you need: ${REQUIREMENTS}${RC}"
+            err "To run me, you need: ${req}"
             exit 1
         fi
     done
 }
 
 checkPackageManager() {
-    PACKAGEMANAGER=$1
-    for pgm in ${PACKAGEMANAGER}; do
+    for pgm in $1; do
         if command_exists "${pgm}"; then
             PACKAGER=${pgm}
-            printf "%b\n" "${CYAN}Using ${pgm} as package manager${RC}"
+            info "Using ${pgm} as package manager"
             break
         fi
     done
 
-    if [ "$PACKAGER" = "apk" ] && grep -qE '^#.*community' /etc/apk/repositories; then
-        "$ESCALATION_TOOL" sed -i '/community/s/^#//' /etc/apk/repositories
-        "$ESCALATION_TOOL" "$PACKAGER" update
-    fi
-
-    ## Ensure Void Linux repositories are configured
     if [ "$PACKAGER" = "xbps-install" ] && [ ! -f /etc/xbps.d/00-repository-main.conf ]; then
-        printf "%b\n" "${YELLOW}No xbps repositories found. Configuring default Void Linux repos...${RC}"
+        info "Configuring default Void Linux repository..."
         "$ESCALATION_TOOL" mkdir -p /etc/xbps.d
         "$ESCALATION_TOOL" sh -c 'echo "repository=https://repo-default.voidlinux.org/current" > /etc/xbps.d/00-repository-main.conf'
-        printf "%b\n" "${GREEN}Default Void Linux repository configured.${RC}"
+        ok "Default Void Linux repository configured"
     fi
 
     if [ -z "$PACKAGER" ]; then
-        printf "%b\n" "${RED}Can't find a supported package manager${RC}"
+        err "Can't find a supported package manager (pacman/xbps-install)"
         exit 1
     fi
 }
 
 checkSuperUser() {
-    SUPERUSERGROUP='wheel sudo root'
-    SUGROUP=""
-    for sug in ${SUPERUSERGROUP}; do
-        if id -nG | grep -qw "${sug}"; then
+    for sug in wheel sudo root; do
+        if id -nG 2>/dev/null | grep -qw "${sug}"; then
             SUGROUP=${sug}
-            printf "%b\n" "${CYAN}Super user group ${SUGROUP}${RC}"
-            break
+            info "Super user group: ${SUGROUP}"
+            return 0
         fi
     done
-    if [ -z "$SUGROUP" ]; then
-        printf "%b\n" "${RED}You need to be a member of the sudo group to run me!${RC}"
-        exit 1
-    fi
+    err "You need to be a member of the sudo/wheel group to run me"
+    exit 1
 }
 
 checkCurrentDirectoryWritable() {
     GITPATH="$(dirname "$(realpath "$0")")"
     if [ ! -w "$GITPATH" ]; then
-        printf "%b\n" "${RED}Can't write to $GITPATH${RC}"
-        exit 1
+        warn "Can't write to $GITPATH - proceeding anyway"
     fi
+}
+
+detectTargetUser() {
+    if [ -n "${SUDO_USER:-}" ]; then
+        TARGET_USER="$SUDO_USER"
+    else
+        TARGET_USER="$(whoami)"
+    fi
+    TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
+    [ -z "$TARGET_HOME" ] && TARGET_HOME="$HOME"
+    info "Target user: $TARGET_USER  Home: $TARGET_HOME"
 }
 
 checkEnv() {
@@ -115,47 +118,62 @@ checkEnv() {
     checkPackageManager 'xbps-install pacman'
     checkCurrentDirectoryWritable
     checkSuperUser
+    detectTargetUser
 }
 
 install_lemurs_pkg() {
-    printf "%b\n" "${YELLOW}Installing Lemurs package...${RC}"
+    info "Installing Lemurs package..."
     case "$PACKAGER" in
         xbps-install)
-            "$ESCALATION_TOOL" "$PACKAGER" -S -y lemurs || exit 1
+            "$ESCALATION_TOOL" "$PACKAGER" -S -y lemurs || {
+                err "Failed to install lemurs package"
+                exit 1
+            }
             ;;
         pacman)
             "$ESCALATION_TOOL" "$PACKAGER" -S --needed --noconfirm lemurs || {
-                printf "%b\n" "${RED}Lemurs not found in official repos. Please install it from AUR.${RC}"
+                err "Lemurs not found in official repos. Install it from AUR."
                 exit 1
             }
             ;;
         *)
-            printf "%b\n" "${RED}Unsupported package manager: $PACKAGER${RC}"
+            err "Unsupported package manager: $PACKAGER"
             exit 1
             ;;
     esac
+    ok "Lemurs package installed"
 }
 
 setup_lemurs_service() {
-    printf "%b\n" "${YELLOW}Setting up Lemurs as a system service...${RC}"
+    info "Setting up Lemurs as a system service..."
 
-    # Common PAM configuration
+    # ── PAM configuration ────────────────────────────────
+    # Use explicit PAM modules instead of "include login" for reliable
+    # credential dropping on both Arch and Void.
     cat <<EOF > /tmp/lemurs_pam
 #%PAM-1.0
-auth        include    login
-account     include    login
-session     include    login
-password    include    login
+auth        required      pam_unix.so
+auth        required      pam_nologin.so
+account     required      pam_unix.so
+password    required      pam_unix.so
+session     required      pam_unix.so
+session     required      pam_loginuid.so
+session     optional      pam_limits.so
 EOF
     "$ESCALATION_TOOL" mv /tmp/lemurs_pam /etc/pam.d/lemurs
 
-    # Common Config
+    # ── Lemurs config ────────────────────────────────────
+    # command = "startx" ensures X is started after login;
+    # without this Lemurs defaults to running the user's shell.
     "$ESCALATION_TOOL" mkdir -p /etc/lemurs
-    echo "tty = 7" > /tmp/lemurs_conf
+    cat <<EOF > /tmp/lemurs_conf
+tty = 7
+command = "startx"
+EOF
     "$ESCALATION_TOOL" mv /tmp/lemurs_conf /etc/lemurs/config.toml
 
+    # ── Service file ─────────────────────────────────────
     if [ "$PACKAGER" = "xbps-install" ]; then
-        # Void Linux / runit
         "$ESCALATION_TOOL" mkdir -p /etc/sv/lemurs
         cat <<EOF > /tmp/lemurs_run
 #!/bin/sh
@@ -171,10 +189,9 @@ exec agetty --noissue --skip-login --login-program /usr/bin/lemurs tty7 linux
 EOF
         "$ESCALATION_TOOL" mv /tmp/lemurs_run /etc/sv/lemurs/run
         "$ESCALATION_TOOL" chmod +x /etc/sv/lemurs/run
-    elif [ "$PACKAGER" = "pacman" ]; then
-        # Arch Linux / systemd
 
-        # 1. Create a wrapper script for the TTY7 switch logic
+    elif [ "$PACKAGER" = "pacman" ]; then
+        # ── Wrapper script ───────────────────────────────
         cat <<EOF > /tmp/lemurs-wrapper
 #!/bin/sh
 if command -v fgconsole >/dev/null 2>&1 && command -v chvt >/dev/null 2>&1; then
@@ -191,7 +208,7 @@ EOF
         "$ESCALATION_TOOL" mv /tmp/lemurs-wrapper /usr/local/bin/lemurs-wrapper
         "$ESCALATION_TOOL" chmod +x /usr/local/bin/lemurs-wrapper
 
-        # 2. Create systemd service
+        # ── systemd service ──────────────────────────────
         cat <<EOF > /tmp/lemurs.service
 [Unit]
 Description=Lemurs Login Manager
@@ -208,26 +225,48 @@ Restart=always
 WantedBy=multi-user.target
 EOF
         "$ESCALATION_TOOL" mv /tmp/lemurs.service /etc/systemd/system/lemurs.service
-
-        # 3. Mask the default getty@tty7 to avoid conflict
         "$ESCALATION_TOOL" systemctl mask getty@tty7.service
     fi
+
+    ok "Lemurs service configured"
 }
 
 activate_lemurs_service() {
-    printf "%b\n" "${YELLOW}Activating Lemurs service...${RC}"
-    if [ "$PACKAGER" = "xbps-install" ]; then
-        if [ -d "/etc/sv/lemurs" ]; then
-            "$ESCALATION_TOOL" ln -sf "/etc/sv/lemurs" "/var/service/"
-            printf "%b\n" "${GREEN}Lemurs service enabled.${RC}"
-        else
-            printf "%b\n" "${RED}Service lemurs not found in /etc/sv/${RC}"
-            exit 1
-        fi
-    elif [ "$PACKAGER" = "pacman" ]; then
-        "$ESCALATION_TOOL" systemctl daemon-reload
-        "$ESCALATION_TOOL" systemctl enable --now lemurs.service
-        printf "%b\n" "${GREEN}Lemurs systemd service enabled and started.${RC}"
+    info "Activating Lemurs service..."
+    case "$PACKAGER" in
+        xbps-install)
+            if [ -d "/etc/sv/lemurs" ]; then
+                "$ESCALATION_TOOL" ln -sf "/etc/sv/lemurs" "/var/service/"
+                ok "Lemurs service enabled (runit)"
+            else
+                err "Service directory /etc/sv/lemurs not found"
+                exit 1
+            fi
+            ;;
+        pacman)
+            "$ESCALATION_TOOL" systemctl daemon-reload
+            "$ESCALATION_TOOL" systemctl enable --now lemurs.service
+            ok "Lemurs service enabled (systemd)"
+            ;;
+    esac
+}
+
+configure_user() {
+    local groups="wheel,video,audio"
+    getent group bluetooth &>/dev/null && groups="$groups,bluetooth"
+    getent group input &>/dev/null && groups="$groups,input"
+
+    info "Adding $TARGET_USER to groups: $groups"
+    if [ "$ESCALATION_TOOL" = "eval" ]; then
+        usermod -aG "$groups" "$TARGET_USER" 2>/dev/null || warn "Failed to modify groups"
+    else
+        "$ESCALATION_TOOL" usermod -aG "$groups" "$TARGET_USER" 2>/dev/null || warn "Failed to modify groups"
+    fi
+
+    if [ ! -f "$TARGET_HOME/.xinitrc" ]; then
+        info "Creating ~/.xinitrc fallback..."
+        echo 'exec dwm' > "$TARGET_HOME/.xinitrc"
+        ok "Created ~/.xinitrc (fallback: dwm)"
     fi
 }
 
@@ -236,7 +275,12 @@ main() {
     install_lemurs_pkg
     setup_lemurs_service
     activate_lemurs_service
-    printf "%b\n" "${GREEN}Lemurs installation complete!${RC}"
+    configure_user
+    echo ""
+    ok "Lemurs installation complete!"
+    echo ""
+    info "Reboot or switch to tty7 to see the login prompt."
+    echo ""
 }
 
 main "$@"
