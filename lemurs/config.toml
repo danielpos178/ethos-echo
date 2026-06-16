@@ -1,0 +1,38 @@
+# Lemurs Configuration — dwm-gossamer
+
+Configuration for Lemurs TUI login manager with Nord theme and MesloLGS NF font.
+
+## Theme Configuration
+
+```toml
+# Main configuration file for customizing the login screen appearance and behavior.
+
+[theme]
+# Font configuration
+font = "MesloLGS NF 12"
+background = "/usr/share/pixmaps/dwm-gossamer.jpg"
+show_hostname = true
+show_clock = true
+
+# Session configuration
+session = "dwm"
+
+# Colors (Nord palette)
+primary_color = "#88C0D0"  # Light blue
+danger_color = "#BF616A"    # Red
+warning_color = "#EBCB8B"   # Yellow
+success_color = "#A3BE89"   # Green
+info_color = "#81A1C1"      # Blue
+
+# Display settings
+screen_width = 80
+screen_height = 24
+
+[authentication]
+# PAM service name
+pam_service = "lemurs"
+
+[logging]
+# Log level (error, warn, info, debug)
+level = "info"
+file = "/var/log/lemurs.log"

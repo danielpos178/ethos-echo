@@ -1,0 +1,18 @@
+# Systemd service file for Lemurs
+# This service starts Lemurs at boot
+
+[Unit]
+Description=Lemurs TUI Login Manager
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/lemurs
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

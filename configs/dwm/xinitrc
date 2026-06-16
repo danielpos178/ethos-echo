@@ -1,0 +1,7 @@
+#!/bin/sh
+
+# xinitrc for dwm managed by ethos-echo
+# This script sets a wallpaper if present and starts dwm under dbus-run-session
+[ -f "$HOME/Pictures/backgrounds/background.jpg" ] && feh --bg-fill "$HOME/Pictures/backgrounds/background.jpg" 2>/dev/null &
+
+exec dwm

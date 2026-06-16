@@ -150,66 +150,9 @@ install_packages() {
     return $missing
 }
 
-setupDWM() {
-    info "Installing dwm-gossamer dependencies..."
+# Local package install helper removed — upstream dwm-gossamer installer is used instead.
+# The installer repo (dwm-gossamer) contains distro-aware package installation logic.
 
-    case "$PACKAGER" in
-        pacman)
-        	install_packages \
-                base-devel git linux-headers unzip curl wget \
-                xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xprop xorg-xset xorg-xhost xf86-input-libinput \
-                libx11 libxinerama libxft libxcb imlib2 fontconfig freetype2 \
-                polybar picom dunst rofi dmenu slock alacritty xdo xdotool \
-                feh flameshot imagemagick ffmpeg playerctl \
-                btop htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
-                tldr dex nwg-look xscreensaver brightnessctl acpi \
-                xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
-                firefox polkit-gnome alsa-utils pavucontrol pipewire gnome-keyring flatpak \
-                networkmanager network-manager-applet openssh neovim \
-                fzf bat fd \
-                ttf-liberation ttf-dejavu noto-fonts noto-fonts-emoji terminus-font \
-                fastfetch starship zoxide man-db
-
-            info "Installing daily-use apps..."
-            install_packages \
-                qalculate-gtk mpv \
-                zathura zathura-pdf-mupdf \
-                copyq blueman gimp \
-                ffmpegthumbnailer poppler
-                
-            ;;
-        xbps-install)
-            install_packages \
-                base-devel git linux-headers unzip curl wget \
-                xorg-server xinit xrandr xsetroot xprop xset xhost xf86-input-libinput \
-                libX11-devel libXinerama-devel libXft-devel libxcb-devel imlib2-devel fontconfig-devel freetype-devel \
-                mesa xf86-video-nouveau \
-                polybar picom dunst rofi dmenu alacritty xdotool \
-                feh htop arandr xclip xsel xarchiver thunar tumbler gvfs thunar-archive-plugin \
-                ImageMagick ffmpeg playerctl \
-                tldr dex xscreensaver brightnessctl acpi bluez \
-                xdg-user-dirs xdg-desktop-portal-gtk xdg-utils \
-                firefox polkit-gnome alsa-utils pavucontrol pipewire gnome-keyring flatpak \
-                NetworkManager network-manager-applet openssh neovim \
-                fzf bat fd \
-                liberation-fonts-ttf dejavu-fonts-ttf noto-fonts-ttf noto-fonts-emoji terminus-font \
-                starship zoxide man-pages mandoc
-
-            info "Installing daily-use apps..."
-            install_packages \
-                qalculate-gtk mpv \
-                zathura zathura-pdf-mupdf \
-                copyq blueman imv gimp \
-                ffmpegthumbnailer poppler
-            ;;
-        *)
-            err "Unsupported package manager: $PACKAGER"
-            exit 1
-            ;;
-    esac
-
-    ok "Dependencies installed"
-}
 
 makeDWM() {
     local share_dir="$TARGET_HOME/.local/share"
@@ -228,12 +171,30 @@ makeDWM() {
         git -C "$repo_dir" pull || warn "git pull failed, continuing with existing code"
     fi
 
-    info "Building dwm..."
-    "$ESCALATION_TOOL" make -C "$repo_dir" clean install || {
-        err "Failed to build dwm"
-        exit 1
-    }
+    # Run upstream repo installer (let dwm-gossamer handle distro-specific installs).
+    # For ARM systems prefer install-arm.sh if present.
+    if [ "$ARCH" = "aarch64" ] || [[ "$ARCH" == arm* ]]; then
+        if [ -x "$repo_dir/install-arm.sh" ] || [ -f "$repo_dir/install-arm.sh" ]; then
+            info "Running dwm-gossamer/install-arm.sh (upstream installer)..."
+            # Run using escalation tool so the upstream installer can perform privileged actions
+            if ! "$ESCALATION_TOOL" bash "$repo_dir/install-arm.sh"; then
+                            warn "Upstream ARM installer failed or was skipped"
+                        fi
+        else
+            warn "No install-arm.sh found in upstream repository — skipping upstream installer"
+        fi
+    else
+        if [ -x "$repo_dir/install.sh" ] || [ -f "$repo_dir/install.sh" ]; then
+            info "Running dwm-gossamer/install.sh (upstream installer)..."
+            if ! "$ESCALATION_TOOL" bash "$repo_dir/install.sh"; then
+                            warn "Upstream installer failed or was skipped"
+                        fi
+        else
+            warn "No install.sh found in upstream repository — skipping upstream installer"
+        fi
+    fi
 
+    # Upstream installer builds dwm; build slstatus here in case upstream didn't.
     info "Building slstatus..."
     "$ESCALATION_TOOL" make -C "$repo_dir/slstatus" clean install || {
         err "Failed to build slstatus"
@@ -293,15 +254,60 @@ install_nerd_font() {
 
 clone_config_folders() {
     local repo_dir="$TARGET_HOME/.local/share/dwm-gossamer"
+    local local_gitpath="${GITPATH:-$(dirname "$(realpath "$0")")}"
 
     mkdir -p "$TARGET_HOME/.config"
     mkdir -p "$TARGET_HOME/.local/bin"
 
+    # --- Copy dwm-gossamer runtime scripts (non-dot files) ---
     if [ -d "$repo_dir/scripts" ]; then
-        cp -rf "$repo_dir/scripts/." "$TARGET_HOME/.local/bin/"
+        mkdir -p "$TARGET_HOME/.local/bin"
+        # Copy non-dot files only (avoid copying the repository's .xinitrc)
+        for f in "$repo_dir/scripts/"*; do
+            [ -e "$f" ] || continue
+            cp -rf "$f" "$TARGET_HOME/.local/bin/" || warn "Failed to copy $f"
+        done
         ok "Scripts copied to ~/.local/bin"
     fi
 
+    # --- Deploy ethos-echo configs (do not overwrite existing user files) ---
+    if [ -d "$local_gitpath/configs" ]; then
+        for cfg in "$local_gitpath/configs/"*/; do
+            [ -d "$cfg" ] || continue
+            cfg_name=$(basename "$cfg")
+            dst="$TARGET_HOME/.config/$cfg_name"
+            mkdir -p "$dst"
+            # Copy non-destructively: do not overwrite existing files
+            cp -r -n "$cfg"* "$dst/" 2>/dev/null || true
+            # Ensure ownership
+            chown -R "$TARGET_USER:$TARGET_USER" "$dst" 2>/dev/null || true
+            ok "Installed config: $cfg_name -> $dst"
+        done
+    else
+        warn "No ethos-echo configs directory found at $local_gitpath/configs"
+    fi
+
+    # Install session entry (dwm.desktop) from ethos-echo configs if available
+    if [ -f "$local_gitpath/configs/dwm/dwm.desktop" ]; then
+        $ESCALATION_TOOL install -Dm644 "$local_gitpath/configs/dwm/dwm.desktop" /usr/share/xsessions/dwm.desktop 2>/dev/null && ok "Installed session entry: /usr/share/xsessions/dwm.desktop" || warn "Failed to install /usr/share/xsessions/dwm.desktop"
+    fi
+
+    # Setup user's .xinitrc from ethos-echo template (if missing)
+    if [ -f "$local_gitpath/configs/dwm/xinitrc" ]; then
+        if [ -f "$TARGET_HOME/.xinitrc" ]; then
+            ok "~/.xinitrc already exists — skipping"
+        else
+            if [ "$ESCALATION_TOOL" = "eval" ]; then
+                cp "$local_gitpath/configs/dwm/xinitrc" "$TARGET_HOME/.xinitrc" || warn "Failed to copy xinitrc template"
+            else
+                $ESCALATION_TOOL install -Dm644 "$local_gitpath/configs/dwm/xinitrc" "$TARGET_HOME/.xinitrc" 2>/dev/null || warn "Failed to install xinitrc template"
+            fi
+            $ESCALATION_TOOL chown "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.xinitrc" 2>/dev/null || true
+            ok "Installed ~/.xinitrc from ethos-echo template"
+        fi
+    fi
+
+    # --- Polybar fonts from dwm-gossamer repo (if present) ---
     mkdir -p "$TARGET_HOME/.local/share/fonts"
     if [ -d "$repo_dir/polybar/fonts" ]; then
         cp -r "$repo_dir/polybar/fonts/"* "$TARGET_HOME/.local/share/fonts/"
@@ -309,15 +315,39 @@ clone_config_folders() {
         ok "Polybar icon fonts installed"
     fi
 
+    # --- Deploy dwm-gossamer config directory (legacy) ---
     if [ -d "$repo_dir/config" ]; then
         for dir in "$repo_dir/config/"*/; do
             [ -d "$dir" ] || continue
             dir_name=$(basename "$dir")
-            cp -r "$dir" "$TARGET_HOME/.config/"
-            ok "Cloned $dir_name to ~/.config/"
+            # Only copy if target doesn't already exist to avoid overwriting user's configs
+            if [ ! -d "$TARGET_HOME/.config/$dir_name" ]; then
+                cp -r "$dir" "$TARGET_HOME/.config/"
+                chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.config/$dir_name" 2>/dev/null || true
+                ok "Cloned $dir_name to ~/.config/"
+            else
+                ok "Config $dir_name already exists in ~/.config/ — skipping"
+            fi
         done
     else
-        warn "Config directory not found in repository"
+        warn "Config directory not found in cloned dwm-gossamer repository"
+    fi
+
+    # --- Lemurs templates / installer (ethos-echo owns lemurs) ---
+    if [ -d "$local_gitpath/lemurs" ]; then
+        # If we have a procedural installer, prefer it
+        if [ -f "$local_gitpath/install-lemurs.sh" ]; then
+            info "Found local install-lemurs.sh — running to install lemurs and deploy templates"
+            bash "$local_gitpath/install-lemurs.sh" || warn "install-lemurs.sh failed or was skipped"
+        else
+            # If lemurs binary exists, deploy templates to system paths
+            if command -v lemurs &>/dev/null; then
+                info "Deploying Lemurs templates from $local_gitpath/lemurs"
+                $ESCALATION_TOOL make -C "$local_gitpath/lemurs" install 2>/dev/null && ok "Lemurs templates installed" || warn "Failed to install Lemurs templates via make"
+            else
+                warn "Lemurs templates present but 'lemurs' not installed — run install-lemurs.sh or install lemurs package first"
+            fi
+        fi
     fi
 }
 
@@ -370,23 +400,96 @@ configure_user() {
     fi
 
     info "Setting up ~/.xinitrc for DWM..."
-    printf '%s\n' \
-        '#!/bin/sh' \
-        '' \
-        '[ -f "$HOME/Pictures/backgrounds/background.jpg" ] && feh --bg-fill "$HOME/Pictures/backgrounds/background.jpg" 2>/dev/null &' \
-        '' \
-        'exec dwm' > "$TARGET_HOME/.xinitrc"
-    ok "Created ~/.xinitrc"
+    # Do not overwrite an existing .xinitrc
+    if [ -f "$TARGET_HOME/.xinitrc" ]; then
+        ok "~/.xinitrc already exists — skipping"
+    else
+        # Prefer ethos-echo template
+        if [ -f "$GITPATH/configs/dwm/xinitrc" ]; then
+            if [ "$ESCALATION_TOOL" = "eval" ]; then
+                cp "$GITPATH/configs/dwm/xinitrc" "$TARGET_HOME/.xinitrc" || warn "Failed to copy xinitrc template"
+            else
+                $ESCALATION_TOOL install -Dm644 "$GITPATH/configs/dwm/xinitrc" "$TARGET_HOME/.xinitrc" 2>/dev/null || warn "Failed to install xinitrc template"
+            fi
+        else
+            # Fallback to repository's .xinitrc if present
+            repo_dir="$TARGET_HOME/.local/share/dwm-gossamer"
+            if [ -f "$repo_dir/scripts/.xinitrc" ]; then
+                if [ "$ESCALATION_TOOL" = "eval" ]; then
+                    cp "$repo_dir/scripts/.xinitrc" "$TARGET_HOME/.xinitrc" || warn "Failed to copy xinitrc from repo"
+                else
+                    $ESCALATION_TOOL install -Dm644 "$repo_dir/scripts/.xinitrc" "$TARGET_HOME/.xinitrc" 2>/dev/null || warn "Failed to install xinitrc from repo"
+                fi
+            else
+                # Last-resort: create minimal xinitrc
+                if [ "$ESCALATION_TOOL" = "eval" ]; then
+                    printf '%s\n' '#!/bin/sh' '' '[ -f "$HOME/Pictures/backgrounds/background.jpg" ] && feh --bg-fill "$HOME/Pictures/backgrounds/background.jpg" 2>/dev/null &' '' 'exec dwm' > "$TARGET_HOME/.xinitrc"
+                else
+                    tmp=$(mktemp)
+                    printf '%s\n' '#!/bin/sh' '' '[ -f "$HOME/Pictures/backgrounds/background.jpg" ] && feh --bg-fill "$HOME/Pictures/backgrounds/background.jpg" 2>/dev/null &' '' 'exec dwm' > "$tmp"
+                    $ESCALATION_TOOL install -Dm644 "$tmp" "$TARGET_HOME/.xinitrc" 2>/dev/null || warn "Failed to create .xinitrc"
+                    rm -f "$tmp"
+                fi
+            fi
+        fi
+
+        # Ensure ownership belongs to target user
+        if [ "$ESCALATION_TOOL" = "eval" ]; then
+            chown "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.xinitrc" 2>/dev/null || true
+        else
+            $ESCALATION_TOOL chown "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.xinitrc" 2>/dev/null || true
+        fi
+
+        ok "Created ~/.xinitrc"
+    fi
 }
 
 main() {
     checkEnv
-    setupDWM
+    # Prefer running the upstream repo installer which handles distro-specific installs (including Void via xbps-install).
+    # We'll clone the repo inside makeDWM which will run the upstream installer; call makeDWM which includes that.
     makeDWM
+
     install_nerd_font
     setup_flatpak
     install_flatpak_apps
     clone_config_folders
+
+    # ── Display manager / Lemurs handling ─────────────────────────
+    currentdm=""
+    for dm in lemurs sddm gdm; do command -v "$dm" &>/dev/null && { currentdm="$dm"; break; }; done
+
+    if [ -n "$currentdm" ]; then
+        ok "Display manager already installed: $currentdm"
+    else
+        info "No display manager found — attempting to install Lemurs login manager..."
+        GITPATH="$(dirname "$(realpath "$0")")"
+
+        # Prefer the local install-lemurs.sh (ethos-echo) if present
+        if [ -f "$GITPATH/install-lemurs.sh" ]; then
+            info "Running $GITPATH/install-lemurs.sh to install and configure Lemurs"
+            # Run as a separate process so the lemurs installer can detect the system and escalate privileges itself
+            bash "$GITPATH/install-lemurs.sh" || warn "install-lemurs.sh failed or was skipped"
+        elif [ -d "$GITPATH/lemurs" ]; then
+            info "Deploying Lemurs templates from $GITPATH/lemurs (make install)"
+            "$ESCALATION_TOOL" make -C "$GITPATH/lemurs" install 2>/dev/null && ok "Lemurs templates installed" || warn "Failed to install Lemurs templates via make"
+
+            # Try to enable Lemurs service for systemd or runit
+            if command -v systemctl &>/dev/null; then
+                "$ESCALATION_TOOL" systemctl daemon-reload
+                "$ESCALATION_TOOL" systemctl enable --now lemurs.service 2>/dev/null && ok "Lemurs service enabled (systemd)" || warn "Failed to enable Lemurs systemd service"
+            elif [ -d "/etc/sv" ]; then
+                if [ -d "/etc/sv/lemurs" ]; then
+                    "$ESCALATION_TOOL" ln -sf "/etc/sv/lemurs" "/var/service/" 2>/dev/null && ok "Lemurs service enabled (runit)" || warn "Failed to enable Lemurs runit service"
+                else
+                    warn "Runit service directory /etc/sv/lemurs not found"
+                fi
+            fi
+        else
+            warn "No Lemurs installer or templates found in ethos-echo — skipping Lemurs setup"
+        fi
+    fi
+
     activate_services
     configure_user
     echo ""

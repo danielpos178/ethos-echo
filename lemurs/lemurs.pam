@@ -1,0 +1,8 @@
+# PAM configuration for Lemurs
+# This allows lemurs to use PAM for authentication
+
+auth     required       pam_unix.so
+auth     optional       pam_ssh_agent_auth.so
+account  required       pam_unix.so
+password required       pam_unix.so
+session  required       pam_unix.so
