@@ -162,7 +162,7 @@ makeDWM() {
 
     if [ ! -d "$repo_dir" ]; then
         info "Cloning dwm-gossamer repository..."
-        git clone https://github.com/Daniel1788/dwm-gossamer.git "$repo_dir" || {
+        git clone https://github.com/danielpos178/dwm-gossamer.git "$repo_dir" || {
             err "Failed to clone repository"
             exit 1
         }
