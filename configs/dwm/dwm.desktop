@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=dwm
-Comment=Dynamic window manager
-Exec=dwm
-TryExec=dwm
-Type=XSession
-Keywords=window manager;tiling;dwm
