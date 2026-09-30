@@ -1,0 +1,101 @@
+# ==============================================================================
+# Umbriel Configuration (Ethos Echo - Gruvbox Dark Edition)
+# Documentation: https://docs.noctalia.dev/umbriel/
+# ==============================================================================
+
+[include]
+files = []
+
+[include.optional]
+files = []
+
+# ==============================================================================
+# General & Session
+# ==============================================================================
+[general]
+autostart = ["noctalia"]
+xwayland = true
+xwayland_native_resolution = true
+
+# ==============================================================================
+# Appearance (Gruvbox Dark)
+# ==============================================================================
+[appearance.blur]
+radius = 3
+
+[colors]
+backdrop = "#282828FF"
+
+# ==============================================================================
+# Keybindings
+# ==============================================================================
+[keybinds]
+# --- Terminal & Launcher ---
+"Mod+Return"       = "spawn:alacritty"
+"Mod+Shift+Return" = "spawn:alacritty"
+"Mod+d"            = "spawn:noctalia msg panel-toggle launcher"
+"Mod+s"            = "spawn:noctalia msg panel-toggle control-center"
+"Mod+n"            = "spawn:noctalia msg panel-toggle notifications"
+"Mod+Escape"       = "spawn:noctalia msg panel-toggle session"
+
+# --- Window Management ---
+"Mod+q"     = "window-close"
+"Mod+Space" = "window-toggle-floating"
+"Mod+t"     = "window-toggle-floating"
+"Mod+f"     = "window-toggle-fullscreen"
+"Mod+p"     = "window-toggle-pinned"
+"Mod+o"     = "overview-toggle"
+
+# --- Focus Navigation (Vim & Arrow keys) ---
+"Mod+h"     = "focus:left"
+"Mod+l"     = "focus:right"
+"Mod+k"     = "focus:up"
+"Mod+j"     = "focus:down"
+"Mod+Left"  = "focus:left"
+"Mod+Right" = "focus:right"
+"Mod+Up"    = "focus:up"
+"Mod+Down"  = "focus:down"
+
+# --- Window Movement ---
+"Mod+Shift+h"     = "move:left"
+"Mod+Shift+l"     = "move:right"
+"Mod+Shift+k"     = "move:up"
+"Mod+Shift+j"     = "move:down"
+"Mod+Shift+Left"  = "move:left"
+"Mod+Shift+Right" = "move:right"
+"Mod+Shift+Up"    = "move:up"
+"Mod+Shift+Down"  = "move:down"
+
+# --- Layout & Sizing ---
+"Mod+r"      = "layout-cycle"
+"Mod+comma"  = "consume:left"
+"Mod+period" = "consume:right"
+
+# --- Workspaces (1 - 9) ---
+"Mod+1" = "workspace:1"
+"Mod+2" = "workspace:2"
+"Mod+3" = "workspace:3"
+"Mod+4" = "workspace:4"
+"Mod+5" = "workspace:5"
+"Mod+6" = "workspace:6"
+"Mod+7" = "workspace:7"
+"Mod+8" = "workspace:8"
+"Mod+9" = "workspace:9"
+
+"Mod+Shift+1" = "window-move-workspace:1"
+"Mod+Shift+2" = "window-move-workspace:2"
+"Mod+Shift+3" = "window-move-workspace:3"
+"Mod+Shift+4" = "window-move-workspace:4"
+"Mod+Shift+5" = "window-move-workspace:5"
+"Mod+Shift+6" = "window-move-workspace:6"
+"Mod+Shift+7" = "window-move-workspace:7"
+"Mod+Shift+8" = "window-move-workspace:8"
+"Mod+Shift+9" = "window-move-workspace:9"
+
+# --- Media & Hardware Keys (PipeWire & brightnessctl) ---
+"XF86AudioRaiseVolume"   = "spawn:wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+"
+"XF86AudioLowerVolume"   = "spawn:wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+"XF86AudioMute"          = "spawn:wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+"XF86AudioMicMute"       = "spawn:wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"
+"XF86MonBrightnessUp"    = "spawn:brightnessctl set +5%"
+"XF86MonBrightnessDown"  = "spawn:brightnessctl set 5%-"

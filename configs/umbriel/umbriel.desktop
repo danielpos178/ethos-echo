@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Umbriel
+Comment=Umbriel Wayland Compositor
+Exec=umbriel
+Type=Application
+DesktopNames=umbriel
+Keywords=wayland;compositor;tiling;noctalia;
