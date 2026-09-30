@@ -2,10 +2,9 @@
 live_config_reload = true
 working_directory = "None"
 
-# Active theme — managed by theme-apply.sh, do not edit manually.
-# Change the theme in ~/.config/dwm-gossamer/themes.toml instead.
+# Active theme — Gruvbox Dark
 import = [
-  "~/.config/alacritty/active-theme.toml",
+  "~/.config/alacritty/gruvbox-dark.toml",
   "~/.config/alacritty/keybinds.toml"
 ]
 
