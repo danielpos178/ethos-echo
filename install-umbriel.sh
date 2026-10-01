@@ -20,6 +20,8 @@ log_success() { printf "%b[SUCCESS] %s%b\n" "${GREEN}" "$1" "${RC}"; }
 log_warn()    { printf "%b[WARN] %s%b\n" "${YELLOW}" "$1" "${RC}"; }
 log_error()   { printf "%b[ERROR] %s%b\n" "${RED}" "$1" "${RC}"; }
 
+SCRIPT_DIR="$(cd "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" && pwd)"
+
 command_exists() {
     for cmd in "$@"; do
         command -v "$cmd" >/dev/null 2>&1 || return 1
@@ -392,10 +394,13 @@ EOF
 configure_user_environment() {
     log_info "Deploying configurations for $USER (Gruvbox Dark)..."
 
-    # Add user to hardware groups
-    local GROUPS="wheel,video,audio,input,storage"
-    getent group seat >/dev/null 2>&1 && GROUPS="$GROUPS,seat"
-    sudo usermod -aG "$GROUPS" "$USER"
+    # Add user to hardware groups if they exist
+    local TARGET_GROUPS="wheel video audio input storage seat"
+    for grp in $TARGET_GROUPS; do
+        if getent group "$grp" >/dev/null 2>&1; then
+            sudo usermod -aG "$grp" "$USER" 2>/dev/null || true
+        fi
+    done
 
     # Initialize XDG user directories
     xdg-user-dirs-update 2>/dev/null || true
