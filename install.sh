@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# ==============================================================================
+# Ethos Echo - Installation Launcher
+# ==============================================================================
+
+set -eo pipefail
 
 # Colors
 RC='\033[0m'
@@ -9,32 +14,29 @@ GREEN='\033[32m'
 BOLD='\033[1m'
 
 # Utility functions
-log_info() { printf "%b\n" "${CYAN}%s${RC}" "$1"; }
+log_info()    { printf "%b\n" "${CYAN}%s${RC}" "$1"; }
 log_success() { printf "%b\n" "${GREEN}%s${RC}" "$1"; }
-log_warn() { printf "%b\n" "${YELLOW}%s${RC}" "$1"; }
-log_error() { printf "%b\n" "${RED}%s${RC}" "$1"; }
+log_warn()    { printf "%b\n" "${YELLOW}%s${RC}" "$1"; }
+log_error()   { printf "%b\n" "${RED}%s${RC}" "$1"; }
 
 # Distro Detection
 detect_distro() {
     if [ -f /etc/arch-release ]; then
-        DISTRO="Arch"
-    elif [ -f /etc/void-release ]; then
-        DISTRO="Void"
+        DISTRO="Arch Linux"
     else
         DISTRO="Unknown"
     fi
 }
 
-# Privilege Escalation Detection
 check_escalation() {
     if [ "$(id -u)" = "0" ]; then
-        log_warn "You are running this menu as root. It is recommended to run as a normal user with sudo/doas privileges."
+        log_warn "You are running this launcher as root. It is recommended to run as a normal user with sudo/doas privileges."
     fi
 }
 
 update_bashrc() {
     if [ -f .bashrc ]; then
-        [ -f ~/.bashrc ] && cp ~/.bashrc ~/.bashrc.backup.$(date +%s)
+        [ -f ~/.bashrc ] && cp ~/.bashrc ~/.bashrc.backup."$(date +%s)"
         cp .bashrc ~/.bashrc
         log_success "Updated ~/.bashrc from repository"
     else
@@ -42,7 +44,6 @@ update_bashrc() {
     fi
 }
 
-# Helper to run scripts
 run_install_script() {
     local script=$1
     local description=$2
@@ -57,61 +58,42 @@ run_install_script() {
     fi
 
     log_info "Starting $description..."
-    # We run the script as the current user because the scripts
-    # handle their own escalation for system-level tasks.
     ./"$script"
 }
 
 show_menu() {
     clear
-    printf "${BOLD}${CYAN}==================================================${RC}\n"
-    printf "${BOLD}${CYAN}           Ethos Echo Installation Menu          ${RC}\n"
-    printf "${BOLD}${CYAN}==================================================${RC}\n"
+    printf "${BOLD}${GREEN}====================================================${RC}\n"
+    printf "${BOLD}${GREEN}            Ethos Echo Installation Menu            ${RC}\n"
+    printf "${BOLD}${GREEN}====================================================${RC}\n"
     printf "System Detected: ${BOLD}%s${RC}\n" "$DISTRO"
-    printf "--------------------------------------------------\n"
-    printf "1) ${BOLD}Full Mango WM Setup${RC} (Core, Lemurs, Noctalia)\n"
-    printf "2) ${BOLD}Full DWM Setup${RC} (Core, Lemurs, Gossamer)\n"
-    printf "3) ${BOLD}Install Lemurs Only${RC} (Session manager setup)\n"
-    printf "4) ${BOLD}Update .bashrc${RC} (Copy from repository)\n"
-    printf "5) ${BOLD}Exit${RC}\n"
-    printf "${BOLD}${CYAN}--------------------------------------------------${RC}\n"
+    printf "----------------------------------------------------\n"
+    printf "1) ${BOLD}Full Umbriel Setup${RC} (Umbriel, Noctalia, Greeter, Alacritty)\n"
+    printf "2) ${BOLD}Update .bashrc${RC} (Copy from repository)\n"
+    printf "3) ${BOLD}Exit${RC}\n"
+    printf "${BOLD}${GREEN}----------------------------------------------------${RC}\n"
     printf "Select an option: "
 }
 
 main() {
     detect_distro
     check_escalation
-    update_bashrc
 
     while true; do
         show_menu
         read -r choice
         case $choice in
             1)
-                # Full Mango Experience
-                run_install_script "install-lemurs.sh" "Lemurs Session Manager"
-                run_install_script "install-mango.sh" "Mango WM & Noctalia Shell"
+                run_install_script "install-umbriel.sh" "Umbriel & Noctalia Suite Installer"
                 printf "\nPress Enter to return to menu..."
                 read -r
                 ;;
             2)
-                # Full DWM Experience
-                run_install_script "install-lemurs.sh" "Lemurs Session Manager"
-                run_install_script "install-dwm.sh" "DWM Gossamer"
-                printf "\nPress Enter to return to menu..."
-                read -r
-                ;;
-            3)
-                run_install_script "install-lemurs.sh" "Lemurs"
-                printf "\nPress Enter to return to menu..."
-                read -r
-                ;;
-            4)
                 update_bashrc
                 printf "\nPress Enter to return to menu..."
                 read -r
                 ;;
-            5)
+            3)
                 log_info "Exiting installer. Goodbye!"
                 exit 0
                 ;;
