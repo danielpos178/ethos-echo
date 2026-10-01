@@ -14,10 +14,10 @@ GREEN='\033[32m'
 BOLD='\033[1m'
 
 # Utility functions
-log_info()    { printf "%b\n" "${CYAN}%s${RC}" "$1"; }
-log_success() { printf "%b\n" "${GREEN}%s${RC}" "$1"; }
-log_warn()    { printf "%b\n" "${YELLOW}%s${RC}" "$1"; }
-log_error()   { printf "%b\n" "${RED}%s${RC}" "$1"; }
+log_info()    { printf "%b%s%b\n" "${CYAN}" "$1" "${RC}"; }
+log_success() { printf "%b%s%b\n" "${GREEN}" "$1" "${RC}"; }
+log_warn()    { printf "%b%s%b\n" "${YELLOW}" "$1" "${RC}"; }
+log_error()   { printf "%b%s%b\n" "${RED}" "$1" "${RC}"; }
 
 # Distro Detection
 detect_distro() {
@@ -62,12 +62,12 @@ run_install_script() {
 }
 
 show_menu() {
-    clear
+    clear 2>/dev/null || true
     printf "${BOLD}${GREEN}====================================================${RC}\n"
     printf "${BOLD}${GREEN}            Ethos Echo Installation Menu            ${RC}\n"
     printf "${BOLD}${GREEN}====================================================${RC}\n"
     printf "System Detected: ${BOLD}%s${RC}\n" "$DISTRO"
-    printf "----------------------------------------------------\n"
+    printf "%s\n" "----------------------------------------------------"
     printf "1) ${BOLD}Full Umbriel Setup${RC} (Umbriel, Noctalia, Greeter, Alacritty)\n"
     printf "2) ${BOLD}Update .bashrc${RC} (Copy from repository)\n"
     printf "3) ${BOLD}Exit${RC}\n"

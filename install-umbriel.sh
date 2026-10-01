@@ -15,10 +15,10 @@ GREEN='\033[32m'
 BOLD='\033[1m'
 
 # Logging Utilities
-log_info()    { printf "%b\n" "${CYAN}[INFO] %s${RC}" "$1"; }
-log_success() { printf "%b\n" "${GREEN}[SUCCESS] %s${RC}" "$1"; }
-log_warn()    { printf "%b\n" "${YELLOW}[WARN] %s${RC}" "$1"; }
-log_error()   { printf "%b\n" "${RED}[ERROR] %s${RC}" "$1"; }
+log_info()    { printf "%b[INFO] %s%b\n" "${CYAN}" "$1" "${RC}"; }
+log_success() { printf "%b[SUCCESS] %s%b\n" "${GREEN}" "$1" "${RC}"; }
+log_warn()    { printf "%b[WARN] %s%b\n" "${YELLOW}" "$1" "${RC}"; }
+log_error()   { printf "%b[ERROR] %s%b\n" "${RED}" "$1" "${RC}"; }
 
 command_exists() {
     for cmd in "$@"; do
@@ -361,7 +361,7 @@ activate_services() {
 # Main Flow
 # ------------------------------------------------------------------------------
 main() {
-    clear
+    clear 2>/dev/null || true
     printf "${BOLD}${GREEN}===================================================================${RC}\n"
     printf "${BOLD}${GREEN}   Ethos Echo: Independent Umbriel & Noctalia Suite Installer     ${RC}\n"
     printf "${BOLD}${GREEN}   Compositor: Umbriel | Shell: Noctalia | Terminal: Alacritty    ${RC}\n"
@@ -394,7 +394,7 @@ main() {
     printf "  ${CYAN}Mod + f${RC}             : Toggle Fullscreen\n"
     printf "  ${CYAN}Mod + o${RC}             : Toggle Overview\n"
     printf "  ${CYAN}Mod + 1..9${RC}          : Switch Workspaces\n"
-    printf "-------------------------------------------------------------------\n"
+    printf "%s\n" "-------------------------------------------------------------------"
     printf "${YELLOW}Next Step: Reboot your machine to enter Noctalia Greeter:${RC}\n"
     printf "  ${BOLD}%s reboot${RC}\n" "$ESCALATION_TOOL"
     printf "${BOLD}${GREEN}===================================================================${RC}\n"
