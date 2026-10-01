@@ -118,12 +118,92 @@ clean_existing_system() {
         fi
     done
 
+    # Clear stale/interrupted AUR build caches to ensure clean rebuild with new compiler flags
+    rm -rf "${HOME}/.cache/yay/noctalia-git" "${HOME}/.cache/yay/umbriel-git" 2>/dev/null || true
+
     log_success "Clean-slate system purge complete."
 }
 
 # ------------------------------------------------------------------------------
-# System Preparation & AUR Bootstrapping
+# System Preparation, Build Optimizations & AUR Bootstrapping
 # ------------------------------------------------------------------------------
+ensure_swap() {
+    local SWAP_TOTAL_MB
+    SWAP_TOTAL_MB="$(free -m | awk '/^Swap:/ {print $2}')"
+    local MEM_TOTAL_MB
+    MEM_TOTAL_MB="$(free -m | awk '/^Mem:/ {print $2}')"
+
+    # If swap is under 2GB and physical RAM is under 6GB, configure swap
+    if [ "${SWAP_TOTAL_MB:-0}" -lt 2048 ] && [ "${MEM_TOTAL_MB:-0}" -lt 6144 ]; then
+        log_info "Low memory detected (RAM: ${MEM_TOTAL_MB}MB, Swap: ${SWAP_TOTAL_MB}MB)."
+        log_info "Configuring swap to prevent Out-Of-Memory (OOM) compiler crashes..."
+
+        local SWAP_FILE="/swapfile_ethos"
+        if [ ! -f "$SWAP_FILE" ]; then
+            local ROOT_AVAIL_MB
+            ROOT_AVAIL_MB="$(df -m / | awk 'NR==2 {print $4}')"
+
+            local SWAP_SIZE_GB=4
+            if [ "${ROOT_AVAIL_MB:-0}" -lt 6000 ]; then
+                SWAP_SIZE_GB=2
+            fi
+
+            if [ "${ROOT_AVAIL_MB:-0}" -gt 2500 ]; then
+                log_info "Creating ${SWAP_SIZE_GB}GB swap file at ${SWAP_FILE}..."
+                local ROOT_FSTYPE
+                ROOT_FSTYPE="$(findmnt -n -o FSTYPE / 2>/dev/null || echo "")"
+
+                if [ "$ROOT_FSTYPE" = "btrfs" ] && command -v btrfs >/dev/null 2>&1; then
+                    sudo btrfs filesystem mkswapfile --size "${SWAP_SIZE_GB}g" "$SWAP_FILE" 2>/dev/null || true
+                else
+                    sudo dd if=/dev/zero of="$SWAP_FILE" bs=1M count=$(( SWAP_SIZE_GB * 1024 )) status=none 2>/dev/null || true
+                    sudo chmod 600 "$SWAP_FILE"
+                    sudo mkswap "$SWAP_FILE" 2>/dev/null || true
+                fi
+            else
+                log_warn "Insufficient free disk space to create swapfile. Proceeding with RAM only."
+            fi
+        fi
+
+        if [ -f "$SWAP_FILE" ]; then
+            sudo swapon "$SWAP_FILE" 2>/dev/null || true
+            log_success "Swap activated successfully."
+        fi
+    fi
+}
+
+configure_build_environment() {
+    log_info "Configuring build optimizations (!lto) for makepkg and AUR builds..."
+
+    local MEM_TOTAL_MB
+    MEM_TOTAL_MB="$(free -m | awk '/^Mem:/ {print $2}')"
+    local CORES
+    CORES="$(nproc 2>/dev/null || echo 1)"
+    local MAKE_JOBS="$CORES"
+
+    if [ "${MEM_TOTAL_MB:-0}" -lt 3072 ] && [ "$CORES" -gt 2 ]; then
+        MAKE_JOBS=2
+        log_info "Constrained RAM detected (${MEM_TOTAL_MB}MB). Limiting build jobs to -j${MAKE_JOBS}."
+    fi
+
+    # 1. System-wide drop-in for makepkg
+    sudo mkdir -p /etc/makepkg.conf.d
+    cat <<EOF | sudo tee /etc/makepkg.conf.d/10-ethos-build.conf >/dev/null
+# Ethos Echo - Build optimizations for AUR compilation
+# Disable LTO to prevent Out-Of-Memory crashes during linking of large C++ suites (Noctalia, Umbriel)
+MAKEFLAGS="-j${MAKE_JOBS}"
+OPTIONS=(strip docs !libtool !staticlibs emptydirs zipman purge !debug !lto)
+EOF
+
+    # 2. User-specific makepkg config
+    mkdir -p "${HOME}/.config/pacman"
+    cat <<EOF > "${HOME}/.config/pacman/makepkg.conf"
+# Ethos Echo - Build optimizations for AUR compilation
+MAKEFLAGS="-j${MAKE_JOBS}"
+OPTIONS=(strip docs !libtool !staticlibs emptydirs zipman purge !debug !lto)
+EOF
+}
+
 prepare_system() {
     log_info "Synchronizing package databases and updating system..."
     sudo pacman -Syu --noconfirm
@@ -131,6 +211,9 @@ prepare_system() {
     log_info "Installing core build tools and dependencies..."
     sudo pacman -S --needed --noconfirm \
         base-devel git curl wget pciutils jq
+
+    ensure_swap
+    configure_build_environment
 }
 
 bootstrap_aur_helper() {
