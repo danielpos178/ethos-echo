@@ -47,26 +47,6 @@ check_cpu_arch() {
     log_info "System architecture: ${ARCH}"
 }
 
-check_escalation_tool() {
-    if [ "$(id -u)" = "0" ]; then
-        log_error "Please do not run this script directly as root. Run as a normal user with sudo/doas privileges."
-        exit 1
-    fi
-
-    ESCALATION_TOOLS='sudo doas'
-    for tool in ${ESCALATION_TOOLS}; do
-        if command_exists "${tool}"; then
-            ESCALATION_TOOL=${tool}
-            log_info "Using ${tool} for privilege escalation"
-            # Cache sudo credentials
-            "$ESCALATION_TOOL" -v
-            return 0
-        fi
-    done
-    log_error "Could not find a supported privilege escalation tool (sudo or doas)."
-    exit 1
-}
-
 detect_target_user() {
     if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
         TARGET_USER="$SUDO_USER"
@@ -77,6 +57,71 @@ detect_target_user() {
     TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
     [ -z "$TARGET_HOME" ] && TARGET_HOME="$HOME"
     log_info "Target user: ${TARGET_USER} (Home: ${TARGET_HOME})"
+}
+
+setup_temp_sudoers() {
+    log_info "Configuring temporary passwordless pacman for makepkg/AUR installs..."
+    "$ESCALATION_TOOL" sh -c "echo '$TARGET_USER ALL=(ALL) NOPASSWD: /usr/bin/pacman' > /etc/sudoers.d/99-ethos-echo-installer"
+    "$ESCALATION_TOOL" chmod 440 /etc/sudoers.d/99-ethos-echo-installer
+}
+
+cleanup() {
+    [ -n "${SUDO_KEEPALIVE_PID:-}" ] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    if [ -f /etc/sudoers.d/99-ethos-echo-installer ]; then
+        "$ESCALATION_TOOL" rm -f /etc/sudoers.d/99-ethos-echo-installer 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+run_user() {
+    if [ "$(id -u)" = "0" ]; then
+        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+            sudo -u "$SUDO_USER" bash -c "$*"
+        else
+            bash -c "$*"
+        fi
+    else
+        bash -c "$*"
+    fi
+}
+
+check_escalation_tool() {
+    if [ "$(id -u)" = "0" ]; then
+        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+            ESCALATION_TOOL="eval"
+            log_info "Running as root via sudo (invoked by ${SUDO_USER})"
+            setup_temp_sudoers
+            return 0
+        fi
+        log_error "Please do not run this script directly as the root account. Run as a normal user with sudo/doas privileges."
+        exit 1
+    fi
+
+    ESCALATION_TOOLS='sudo doas'
+    for tool in ${ESCALATION_TOOLS}; do
+        if command_exists "${tool}"; then
+            ESCALATION_TOOL=${tool}
+            log_info "Using ${tool} for privilege escalation"
+
+            # Cache sudo credentials upfront
+            "$ESCALATION_TOOL" -v
+
+            # Keep sudo credentials alive in background during builds
+            if [ "$ESCALATION_TOOL" = "sudo" ]; then
+                (while true; do
+                    sudo -n true 2>/dev/null
+                    sleep 45
+                    kill -0 "$$" 2>/dev/null || exit 0
+                done) 2>/dev/null &
+                SUDO_KEEPALIVE_PID=$!
+            fi
+
+            setup_temp_sudoers
+            return 0
+        fi
+    done
+    log_error "Could not find a supported privilege escalation tool (sudo or doas)."
+    exit 1
 }
 
 check_writable_dir() {
@@ -90,8 +135,8 @@ check_writable_dir() {
 check_env() {
     check_arch_distro
     check_cpu_arch
-    check_escalation_tool
     detect_target_user
+    check_escalation_tool
     check_writable_dir
 }
 
@@ -145,11 +190,18 @@ bootstrap_aur_helper() {
     fi
 
     log_info "No AUR helper found. Bootstrapping yay-bin from AUR..."
-    local BUILD_DIR
-    BUILD_DIR="$(mktemp -d /tmp/yay-bin-build.XXXXXX)"
-    chmod 777 "$BUILD_DIR"
+    local BUILD_DIR="/tmp/yay-bin-build-$TARGET_USER"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    if [ "$(id -u)" = "0" ]; then
+        chown -R "$TARGET_USER:$TARGET_USER" "$BUILD_DIR"
+    fi
 
-    su - "$TARGET_USER" -c "git clone https://aur.archlinux.org/yay-bin.git '$BUILD_DIR' && cd '$BUILD_DIR' && makepkg -si --noconfirm"
+    log_info "Cloning yay-bin..."
+    run_user "git clone https://aur.archlinux.org/yay-bin.git '$BUILD_DIR'"
+
+    log_info "Compiling and installing yay-bin..."
+    (cd "$BUILD_DIR" && run_user "makepkg -si --noconfirm")
 
     rm -rf "$BUILD_DIR"
 
@@ -213,15 +265,15 @@ install_aur_desktop_packages() {
 
     # Install Noctalia Greeter
     log_info "Installing noctalia-greeter..."
-    su - "$TARGET_USER" -c "$AUR_HELPER -S --needed --noconfirm noctalia-greeter || $AUR_HELPER -S --needed --noconfirm noctalia-greeter-git"
+    run_user "$AUR_HELPER -S --needed --noconfirm noctalia-greeter || $AUR_HELPER -S --needed --noconfirm noctalia-greeter-git"
 
     # Install Noctalia Desktop Shell
     log_info "Installing noctalia desktop shell..."
-    su - "$TARGET_USER" -c "$AUR_HELPER -S --needed --noconfirm noctalia || $AUR_HELPER -S --needed --noconfirm noctalia-git"
+    run_user "$AUR_HELPER -S --needed --noconfirm noctalia || $AUR_HELPER -S --needed --noconfirm noctalia-git"
 
     # Install Umbriel & Portal
     log_info "Installing umbriel-git & xdg-desktop-portal-umbriel-git..."
-    su - "$TARGET_USER" -c "$AUR_HELPER -S --needed --noconfirm xdg-desktop-portal-umbriel-git umbriel-git"
+    run_user "$AUR_HELPER -S --needed --noconfirm xdg-desktop-portal-umbriel-git umbriel-git"
 
     log_success "AUR desktop packages installed successfully."
 }
@@ -305,7 +357,7 @@ configure_user_environment() {
     "$ESCALATION_TOOL" usermod -aG "$GROUPS" "$TARGET_USER"
 
     # Initialize XDG user directories
-    su - "$TARGET_USER" -c "xdg-user-dirs-update" 2>/dev/null || true
+    run_user "xdg-user-dirs-update" 2>/dev/null || true
 
     # 1. Deploy Umbriel config
     mkdir -p "${TARGET_HOME}/.config/umbriel"
