@@ -178,11 +178,15 @@ install_graphics() {
 
     if lspci | grep -qi "nvidia"; then
         log_info "NVIDIA GPU detected. Installing nvidia driver stack..."
-        sudo pacman -S --needed --noconfirm nvidia nvidia-utils libva-nvidia-driver
+        local NVIDIA_PKG="nvidia-open"
+        if pacman -Q linux-lts >/dev/null 2>&1; then
+            NVIDIA_PKG="nvidia-open-lts"
+        fi
+        sudo pacman -S --needed --noconfirm "$NVIDIA_PKG" nvidia-utils libva-nvidia-driver
         log_warn "NVIDIA Note: Make sure 'nvidia-drm.modeset=1' and 'nvidia-drm.fbdev=1' are added to kernel parameters."
     elif lspci | grep -qi "amd"; then
         log_info "AMD GPU detected. Installing AMD Vulkan and VA-API drivers..."
-        sudo pacman -S --needed --noconfirm vulkan-radeon libva-mesa-driver mesa-vdpau
+        sudo pacman -S --needed --noconfirm vulkan-radeon libva-mesa-driver
     elif lspci | grep -qi "intel"; then
         log_info "Intel GPU detected. Installing Intel Vulkan and Media drivers..."
         sudo pacman -S --needed --noconfirm vulkan-intel intel-media-driver
@@ -197,7 +201,7 @@ install_graphics() {
 install_core_services() {
     log_info "Installing core system, audio, networking, and font packages..."
     sudo pacman -S --needed --noconfirm \
-        dbus NetworkManager \
+        dbus networkmanager \
         pipewire wireplumber pipewire-pulse pipewire-alsa pipewire-jack \
         bluez bluez-utils \
         polkit lxqt-policykit \
@@ -223,7 +227,7 @@ install_aur_desktop_packages() {
 
     # Install Noctalia Desktop Shell
     log_info "Installing noctalia desktop shell..."
-    $AUR_HELPER -S --needed --noconfirm noctalia || $AUR_HELPER -S --needed --noconfirm noctalia-git
+    $AUR_HELPER -S --needed --noconfirm noctalia-git
 
     # Install Umbriel & Portal
     log_info "Installing umbriel-git & xdg-desktop-portal-umbriel-git..."
