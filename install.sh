@@ -29,8 +29,11 @@ detect_distro() {
 }
 
 check_escalation() {
-    if [ "$(id -u)" = "0" ]; then
-        log_warn "You are running this launcher as root. It is recommended to run as a normal user with sudo/doas privileges."
+    if [ "$(id -u)" -eq 0 ]; then
+        log_error "Do not run this installer as root or with sudo!"
+        log_info "makepkg and AUR tools strictly require running as a regular user."
+        log_info "Please run as your regular user: ./install.sh"
+        exit 1
     fi
 }
 
