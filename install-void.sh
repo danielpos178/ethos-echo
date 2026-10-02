@@ -154,14 +154,10 @@ clean_existing_system() {
         fi
     done
 
-    # Remove conflicting acpid and seatd (elogind manages ACPI events and seat sessions)
+    # Remove conflicting acpid (elogind handles ACPI events and power management)
     if [ -L "/var/service/acpid" ] || [ -d "/var/service/acpid" ]; then
         log_warn "Removing /var/service/acpid (prevents conflict with elogind ACPI handler)..."
         sudo rm -f "/var/service/acpid" 2>/dev/null || true
-    fi
-    if [ -L "/var/service/seatd" ] || [ -d "/var/service/seatd" ]; then
-        log_warn "Removing /var/service/seatd (using elogind for seat management)..."
-        sudo rm -f "/var/service/seatd" 2>/dev/null || true
     fi
 
     # Remove stale temporary build directories
@@ -296,7 +292,7 @@ install_graphics() {
 install_core_services() {
     log_info "Installing system plumbing, audio, session management, and fonts..."
     sudo xbps-install -y \
-        dbus elogind NetworkManager accountsservice \
+        dbus elogind seatd NetworkManager accountsservice \
         pipewire wireplumber alsa-pipewire \
         bluez \
         polkit lxqt-policykit \
@@ -439,7 +435,7 @@ configure_greeter() {
     # Ensure both greeter and _greeter (Void package default) have necessary hardware groups
     for guser in greeter _greeter; do
         if id -u "$guser" >/dev/null 2>&1; then
-            for grp in video input seat _seatd audio; do
+            for grp in video input render seat _seatd audio; do
                 if getent group "$grp" >/dev/null 2>&1; then
                     sudo usermod -aG "$grp" "$guser" 2>/dev/null || true
                 fi
@@ -447,8 +443,10 @@ configure_greeter() {
         fi
     done
 
-    # Ensure /etc/pam.d/greetd exists and includes pam_elogind.so
-    log_info "Configuring /etc/pam.d/greetd with elogind session support..."
+    # Configure /etc/pam.d/greetd matching official Void Linux specifications
+    # Note: system-local-login already delegates to system-login (pam_elogind.so).
+    # Adding pam_elogind.so separately here causes duplicate session registration in elogind.
+    log_info "Configuring /etc/pam.d/greetd with canonical Void Linux PAM stack..."
     sudo mkdir -p /etc/pam.d
     cat <<EOF | sudo tee /etc/pam.d/greetd >/dev/null
 #%PAM-1.0
@@ -458,22 +456,25 @@ auth       include      system-local-login
 -auth      optional     pam_gnome_keyring.so
 account    include      system-local-login
 session    include      system-local-login
-session    optional     pam_elogind.so
 -session   optional     pam_gnome_keyring.so auto_start
 EOF
 
-    # Run upstream greeter setup script if available
-    if [ -x /usr/share/noctalia-greeter/setup_greeter_system.sh ]; then
-        log_info "Executing noctalia-greeter system setup script..."
-        sudo /usr/share/noctalia-greeter/setup_greeter_system.sh || true
-    fi
-
-    # Ensure greeter state directory permissions
+    # Ensure greeter state directory and log permissions
     sudo mkdir -p /var/lib/noctalia-greeter
     local GREETER_GRP
     GREETER_GRP="$(id -gn greeter 2>/dev/null || echo greeter)"
     sudo chown -R "greeter:${GREETER_GRP}" /var/lib/noctalia-greeter 2>/dev/null || true
     sudo chmod 755 /var/lib/noctalia-greeter
+
+    sudo touch /var/log/noctalia-greeter.log
+    sudo chown "greeter:${GREETER_GRP}" /var/log/noctalia-greeter.log 2>/dev/null || true
+    sudo chmod 664 /var/log/noctalia-greeter.log 2>/dev/null || true
+
+    # Initialize greeter configuration via appearance tool if available
+    if [ -x /usr/bin/noctalia-greeter-apply-appearance ]; then
+        log_info "Initializing greeter configuration..."
+        sudo GREETER_USER=greeter /usr/bin/noctalia-greeter-apply-appearance --setup-system 2>/dev/null || true
+    fi
 
     # Write /etc/greetd/config.toml
     log_info "Writing /etc/greetd/config.toml..."
@@ -483,23 +484,25 @@ EOF
 vt = 1
 
 [default_session]
-command = "/usr/bin/noctalia-greeter-session"
+command = "env LIBSEAT_BACKEND=seatd NOCTALIA_GREETER_LOG=/var/log/noctalia-greeter.log /usr/bin/noctalia-greeter-session"
 user = "greeter"
 EOF
 
-    # Create robust runit service for greetd (verifies D-Bus and locale before starting)
+    # Create robust runit service for greetd (verifies D-Bus and seatd before starting)
     log_info "Setting up greetd runit service (/etc/sv/greetd)..."
     sudo mkdir -p /etc/sv/greetd
     cat <<'EOF' | sudo tee /etc/sv/greetd/run >/dev/null
 #!/bin/sh
 exec 2>&1
 
-# Wait up to 10 seconds for D-Bus system bus and elogind session daemon to be running
-sv -w10 check dbus >/dev/null 2>&1 || exit 1
-sv -w10 check elogind >/dev/null 2>&1 || exit 1
+# Ensure D-Bus and seatd services are available
+sv -w5 check dbus >/dev/null 2>&1 || true
+sv -w5 check seatd >/dev/null 2>&1 || true
 
 # Respect system locale from /etc/locale.conf
 [ -r /etc/locale.conf ] && . /etc/locale.conf && export LANG
+
+export LIBSEAT_BACKEND=seatd
 
 exec greetd
 EOF
@@ -546,6 +549,7 @@ export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 # Seat & Session identifiers
 export XDG_SEAT="${XDG_SEAT:-seat0}"
 export XDG_VTNR="${XDG_VTNR:-1}"
+export LIBSEAT_BACKEND="${LIBSEAT_BACKEND:-seatd}"
 
 # Wayland environment variables
 export MOZ_ENABLE_WAYLAND=1
@@ -627,7 +631,7 @@ configure_user_environment() {
     log_info "Deploying configurations for $USER (Gruvbox Dark)..."
 
     # Add user to required hardware and privilege groups
-    local TARGET_GROUPS="wheel video audio input storage network kvm seat _seatd"
+    local TARGET_GROUPS="wheel video audio input render storage network kvm seat _seatd"
     for grp in $TARGET_GROUPS; do
         if getent group "$grp" >/dev/null 2>&1; then
             sudo usermod -aG "$grp" "$USER" 2>/dev/null || true
@@ -692,18 +696,14 @@ EOF
 activate_services() {
     log_info "Enabling essential system services in runit..."
 
-    # 1. Core system daemons (dbus, elogind, NetworkManager)
-    # Disable conflicting acpid and seatd (elogind manages ACPI events and seat sessions)
+    # 1. Core system daemons (dbus, elogind, seatd, NetworkManager)
+    # Disable conflicting acpid (elogind handles ACPI power events)
     if [ -L /var/service/acpid ] || [ -d /var/service/acpid ]; then
         log_info "Disabling acpid to prevent conflict with elogind..."
         sudo rm -f /var/service/acpid 2>/dev/null || true
     fi
-    if [ -L /var/service/seatd ] || [ -d /var/service/seatd ]; then
-        log_info "Removing /var/service/seatd (using elogind for seat management)..."
-        sudo rm -f /var/service/seatd 2>/dev/null || true
-    fi
 
-    local CORE_SERVICES="dbus elogind NetworkManager"
+    local CORE_SERVICES="dbus elogind seatd NetworkManager"
     for svc in $CORE_SERVICES; do
         if [ -d "/etc/sv/$svc" ]; then
             sudo ln -sf "/etc/sv/$svc" /var/service/
