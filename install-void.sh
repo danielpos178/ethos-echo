@@ -647,12 +647,11 @@ activate_services() {
 
     # 3. Greetd Display Manager (activated after D-Bus and elogind are in place)
     if [ -d /etc/sv/greetd ]; then
-        # Disable conflicting agetty on tty1 so greetd owns vt1
+        # Disable conflicting agetty on tty1 so greetd owns vt1 without blocking current TTY
         if [ -L /var/service/agetty-tty1 ] || [ -d /var/service/agetty-tty1 ]; then
             log_info "Disabling agetty-tty1 to prevent TTY conflicts with greetd..."
-            sudo sv down agetty-tty1 2>/dev/null || true
-            sudo rm -f /var/service/agetty-tty1
             sudo touch /etc/sv/agetty-tty1/down 2>/dev/null || true
+            sudo rm -f /var/service/agetty-tty1 2>/dev/null || true
         fi
 
         sudo ln -sf /etc/sv/greetd /var/service/
