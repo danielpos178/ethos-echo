@@ -267,7 +267,7 @@ install_build_tools() {
 install_graphics() {
     log_info "Detecting GPU and installing display drivers..."
     sudo xbps-install -y \
-        mesa-dri vulkan-loader xwayland
+        mesa-dri vulkan-loader xorg-server-xwayland
 
     if lspci 2>/dev/null | grep -qi "nvidia"; then
         log_info "NVIDIA GPU detected."
@@ -343,7 +343,7 @@ build_and_install_umbriel() {
         pixman-devel libdrm-devel libgbm-devel libglvnd-devel \
         eudev-libudev-devel \
         cairo-devel pango-devel \
-        tomlplusplus-devel nlohmann-json \
+        tomlplusplus-devel json-c++ \
         libxcb-devel xcb-util-wm-devel jemalloc-devel \
         xwayland-satellite 2>/dev/null || true
 
