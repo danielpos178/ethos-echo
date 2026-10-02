@@ -269,7 +269,7 @@ install_core_services() {
     log_info "Installing system plumbing, audio, session management, and fonts..."
     sudo xbps-install -y \
         dbus elogind NetworkManager \
-        pipewire wireplumber \
+        pipewire wireplumber wireplumber-elogind alsa-pipewire \
         bluez \
         polkit lxqt-policykit \
         xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk xdg-user-dirs \
@@ -390,11 +390,37 @@ configure_greeter() {
     if ! id -u greeter >/dev/null 2>&1; then
         log_info "Creating 'greeter' system user..."
         sudo useradd -M -G video,input -s /usr/bin/nologin -d /var/lib/noctalia-greeter greeter 2>/dev/null || true
-    else
-        sudo usermod -aG video,input greeter 2>/dev/null || true
     fi
 
-    # Upstream setup script if packaged
+    # Ensure both greeter and _greeter (Void package default) have necessary hardware groups
+    for guser in greeter _greeter; do
+        if id -u "$guser" >/dev/null 2>&1; then
+            for grp in video input seat _seatd audio; do
+                if getent group "$grp" >/dev/null 2>&1; then
+                    sudo usermod -aG "$grp" "$guser" 2>/dev/null || true
+                fi
+            done
+        fi
+    done
+
+    # Ensure /etc/pam.d/greetd exists with standard Void PAM configuration
+    if [ ! -f /etc/pam.d/greetd ]; then
+        log_info "Configuring /etc/pam.d/greetd..."
+        sudo mkdir -p /etc/pam.d
+        cat <<EOF | sudo tee /etc/pam.d/greetd >/dev/null
+#%PAM-1.0
+auth       required     pam_securetty.so
+auth       requisite    pam_nologin.so
+auth       include      system-local-login
+-auth      optional     pam_gnome_keyring.so
+account    include      system-local-login
+session    include      system-local-login
+session    optional     pam_elogind.so
+-session   optional     pam_gnome_keyring.so auto_start
+EOF
+    fi
+
+    # Run upstream greeter setup script if available
     if [ -x /usr/share/noctalia-greeter/setup_greeter_system.sh ]; then
         log_info "Executing noctalia-greeter system setup script..."
         sudo /usr/share/noctalia-greeter/setup_greeter_system.sh || true
@@ -417,36 +443,32 @@ command = "/usr/bin/noctalia-greeter-session"
 user = "greeter"
 EOF
 
-    # Ensure /etc/pam.d/greetd exists with standard Void PAM configuration
-    if [ ! -f /etc/pam.d/greetd ]; then
-        log_info "Configuring /etc/pam.d/greetd..."
-        sudo mkdir -p /etc/pam.d
-        cat <<EOF | sudo tee /etc/pam.d/greetd >/dev/null
-#%PAM-1.0
-auth     include  system-auth
-account  include  system-auth
-password include  system-auth
-session  include  system-auth
-EOF
-    fi
-
-    # Create runit service for greetd
+    # Create robust runit service for greetd (verifies D-Bus and locale before starting)
     log_info "Setting up greetd runit service (/etc/sv/greetd)..."
     sudo mkdir -p /etc/sv/greetd
     cat <<'EOF' | sudo tee /etc/sv/greetd/run >/dev/null
 #!/bin/sh
-exec greetd 2>&1
+exec 2>&1
+set -e
+
+# Wait for D-Bus system bus to be running
+sv check dbus >/dev/null 2>&1 || exit 1
+
+# Wake up elogind / login1 session manager if present
+if [ -x /usr/bin/elogind-inhibit ]; then
+    dbus-send --system --print-reply --dest=org.freedesktop.DBus \
+        /org/freedesktop/DBus \
+        org.freedesktop.DBus.StartServiceByName \
+        string:org.freedesktop.login1 uint32:0 >/dev/null 2>&1 || true
+fi
+
+# Respect system locale from /etc/locale.conf
+[ -r /etc/locale.conf ] && . /etc/locale.conf && export LANG
+
+exec greetd
 EOF
     sudo chmod +x /etc/sv/greetd/run
 
-    # Disable agetty on tty1 so greetd owns vt1 without conflict
-    if [ -L /var/service/agetty-tty1 ]; then
-        log_info "Disabling agetty-tty1 to prevent TTY conflicts with greetd..."
-        sudo rm -f /var/service/agetty-tty1
-    fi
-
-    # Enable greetd runit service
-    sudo ln -sf /etc/sv/greetd /var/service/
     log_success "Greetd and Noctalia Greeter configured."
 }
 
@@ -588,12 +610,9 @@ EOF
 activate_services() {
     log_info "Enabling essential system services in runit..."
 
-    local SERVICES="dbus elogind NetworkManager"
-    if [ -d /etc/sv/bluetoothd ]; then
-        SERVICES="$SERVICES bluetoothd"
-    fi
-
-    for svc in $SERVICES; do
+    # 1. Core system daemons (dbus, elogind, NetworkManager)
+    local CORE_SERVICES="dbus elogind NetworkManager"
+    for svc in $CORE_SERVICES; do
         if [ -d "/etc/sv/$svc" ]; then
             sudo ln -sf "/etc/sv/$svc" /var/service/
             log_info "Enabled runit service: $svc"
@@ -601,6 +620,26 @@ activate_services() {
             log_warn "Service template /etc/sv/$svc not found, skipping."
         fi
     done
+
+    # 2. Bluetooth daemon if present
+    if [ -d /etc/sv/bluetoothd ]; then
+        sudo ln -sf /etc/sv/bluetoothd /var/service/
+        log_info "Enabled runit service: bluetoothd"
+    fi
+
+    # 3. Greetd Display Manager (activated after D-Bus and elogind are in place)
+    if [ -d /etc/sv/greetd ]; then
+        # Disable conflicting agetty on tty1 so greetd owns vt1
+        if [ -L /var/service/agetty-tty1 ] || [ -d /var/service/agetty-tty1 ]; then
+            log_info "Disabling agetty-tty1 to prevent TTY conflicts with greetd..."
+            sudo sv down agetty-tty1 2>/dev/null || true
+            sudo rm -f /var/service/agetty-tty1
+            sudo touch /etc/sv/agetty-tty1/down 2>/dev/null || true
+        fi
+
+        sudo ln -sf /etc/sv/greetd /var/service/
+        log_info "Enabled runit service: greetd"
+    fi
 }
 
 # ------------------------------------------------------------------------------
