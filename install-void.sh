@@ -533,11 +533,11 @@ if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
 fi
 export XDG_CONFIG_HOME="${HOME}/.config"
 
-# Fallback for XDG_RUNTIME_DIR if not set by PAM
-if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "${XDG_RUNTIME_DIR:-}" ]; then
+# Fallback for XDG_RUNTIME_DIR if not set by PAM or if owned by another user
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "${XDG_RUNTIME_DIR:-}" ] || [ "$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null)" != "$(id -u)" ]; then
     export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-    if [ ! -d "$XDG_RUNTIME_DIR" ]; then
-        mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || export XDG_RUNTIME_DIR="/tmp/user-$(id -u)-runtime"
+    if [ ! -d "$XDG_RUNTIME_DIR" ] || [ "$(stat -c '%u' "$XDG_RUNTIME_DIR" 2>/dev/null)" != "$(id -u)" ]; then
+        export XDG_RUNTIME_DIR="/tmp/user-$(id -u)-runtime"
         mkdir -p "$XDG_RUNTIME_DIR"
         chmod 700 "$XDG_RUNTIME_DIR"
     fi
@@ -558,10 +558,16 @@ export XDG_CURRENT_DESKTOP="umbriel:GNOME"
 export XDG_SESSION_TYPE="wayland"
 export XDG_SESSION_DESKTOP="umbriel"
 
-# Log session output for diagnosis
-exec >"/tmp/umbriel-session-${USER}.log" 2>&1
-echo "=== Starting Umbriel Session ($(date)) ==="
-echo "USER=$USER, UID=$(id -u), HOME=$HOME, XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+# Output logging
+if [ -t 1 ] || [ -t 2 ]; then
+    echo "=== Starting Umbriel Session ($(date)) ==="
+    echo "USER=$USER, UID=$(id -u), HOME=$HOME, XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+    echo "Logs mirrored at ~/.cache/umbriel/umbriel.log"
+else
+    exec >"/tmp/umbriel-session-${USER}.log" 2>&1
+    echo "=== Starting Umbriel Session ($(date)) ==="
+    echo "USER=$USER, UID=$(id -u), HOME=$HOME, XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+fi
 
 if ! command -v umbriel >/dev/null 2>&1; then
     echo "ERROR: umbriel compositor executable not found in PATH ($PATH)!"
@@ -575,6 +581,7 @@ else
 fi
 EOF
     sudo chmod 755 /usr/local/bin/umbriel-session
+    sudo ln -sf /usr/local/bin/umbriel-session /usr/local/bin/start-umbriel
 
     # 2. Desktop session file
     sudo mkdir -p /usr/share/wayland-sessions
