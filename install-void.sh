@@ -154,6 +154,16 @@ clean_existing_system() {
         fi
     done
 
+    # Remove supervised elogind and conflicting acpid (elogind is auto-activated via D-Bus)
+    if [ -L "/var/service/elogind" ] || [ -d "/var/service/elogind" ]; then
+        log_warn "Removing supervised /var/service/elogind (Void best practice: activated via D-Bus)..."
+        sudo rm -f "/var/service/elogind" 2>/dev/null || true
+    fi
+    if [ -L "/var/service/acpid" ] || [ -d "/var/service/acpid" ]; then
+        log_warn "Removing /var/service/acpid (prevents conflict with elogind ACPI handler)..."
+        sudo rm -f "/var/service/acpid" 2>/dev/null || true
+    fi
+
     # Remove stale temporary build directories
     rm -rf /tmp/umbriel-build.* /tmp/umbriel-portal-build.* 2>/dev/null || true
 
@@ -286,7 +296,7 @@ install_graphics() {
 install_core_services() {
     log_info "Installing system plumbing, audio, session management, and fonts..."
     sudo xbps-install -y \
-        dbus elogind NetworkManager \
+        dbus elogind NetworkManager accountsservice \
         pipewire wireplumber wireplumber-elogind alsa-pipewire \
         bluez \
         polkit lxqt-policykit \
@@ -467,18 +477,9 @@ EOF
     cat <<'EOF' | sudo tee /etc/sv/greetd/run >/dev/null
 #!/bin/sh
 exec 2>&1
-set -e
 
 # Wait for D-Bus system bus to be running
 sv check dbus >/dev/null 2>&1 || exit 1
-
-# Wake up elogind / login1 session manager if present
-if [ -x /usr/bin/elogind-inhibit ]; then
-    dbus-send --system --print-reply --dest=org.freedesktop.DBus \
-        /org/freedesktop/DBus \
-        org.freedesktop.DBus.StartServiceByName \
-        string:org.freedesktop.login1 uint32:0 >/dev/null 2>&1 || true
-fi
 
 # Respect system locale from /etc/locale.conf
 [ -r /etc/locale.conf ] && . /etc/locale.conf && export LANG
@@ -496,10 +497,36 @@ EOF
 configure_session_and_helpers() {
     log_info "Configuring Wayland session wrapper and autostart helpers..."
 
-    # 1. System-wide umbriel-session wrapper (ensures D-Bus session bus on non-systemd)
+    # 1. System-wide umbriel-session wrapper (ensures XDG_RUNTIME_DIR and D-Bus session bus)
     cat <<'EOF' | sudo tee /usr/local/bin/umbriel-session >/dev/null
 #!/bin/sh
 # Ethos Echo - Umbriel Session Wrapper (Void Linux)
+
+# Fallback for XDG_RUNTIME_DIR if not set by PAM
+if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "${XDG_RUNTIME_DIR:-}" ]; then
+    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    if [ ! -d "$XDG_RUNTIME_DIR" ]; then
+        mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || export XDG_RUNTIME_DIR="/tmp/user-$(id -u)-runtime"
+        mkdir -p "$XDG_RUNTIME_DIR"
+        chmod 700 "$XDG_RUNTIME_DIR"
+    fi
+fi
+
+# Ensure standard paths
+export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# Wayland environment variables
+export MOZ_ENABLE_WAYLAND=1
+export QT_QPA_PLATFORM="wayland;xcb"
+export XDG_CURRENT_DESKTOP="umbriel:GNOME"
+export XDG_SESSION_TYPE="wayland"
+export XDG_SESSION_DESKTOP="umbriel"
+
+# Log session output for diagnosis
+exec >"/tmp/umbriel-session-${USER}.log" 2>&1
+echo "=== Starting Umbriel Session ($(date)) ==="
+echo "USER=$USER, UID=$(id -u), XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
     exec dbus-run-session umbriel "$@"
 else
@@ -628,8 +655,19 @@ EOF
 activate_services() {
     log_info "Enabling essential system services in runit..."
 
-    # 1. Core system daemons (dbus, elogind, NetworkManager)
-    local CORE_SERVICES="dbus elogind NetworkManager"
+    # 1. Core system daemons (dbus, NetworkManager)
+    # NOTE: elogind is auto-activated by D-Bus on Void Linux. Supervised /var/service/elogind
+    # causes duplicate instance PID collisions ("elogind is already running as PID ...").
+    if [ -L /var/service/elogind ] || [ -d /var/service/elogind ]; then
+        log_info "Removing /var/service/elogind (auto-activated via D-Bus)..."
+        sudo rm -f /var/service/elogind 2>/dev/null || true
+    fi
+    if [ -L /var/service/acpid ] || [ -d /var/service/acpid ]; then
+        log_info "Disabling acpid to prevent conflict with elogind..."
+        sudo rm -f /var/service/acpid 2>/dev/null || true
+    fi
+
+    local CORE_SERVICES="dbus NetworkManager"
     for svc in $CORE_SERVICES; do
         if [ -d "/etc/sv/$svc" ]; then
             sudo ln -sf "/etc/sv/$svc" /var/service/
