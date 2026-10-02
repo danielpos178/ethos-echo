@@ -21,10 +21,21 @@ log_error()   { printf "%b%s%b\n" "${RED}" "$1" "${RC}"; }
 
 # Distro Detection
 detect_distro() {
-    if [ -f /etc/arch-release ]; then
+    if [ -f /etc/os-release ]; then
+        if grep -q -E '^ID="?arch"?' /etc/os-release || grep -q -E '^ID_LIKE=.*arch.*' /etc/os-release || [ -f /etc/arch-release ]; then
+            DISTRO="Arch Linux"
+            DEFAULT_INSTALLER="install-umbriel.sh"
+        elif grep -q -E '^ID="?void"?' /etc/os-release || command -v xbps-install >/dev/null 2>&1 || [ -d /var/db/xbps ]; then
+            DISTRO="Void Linux"
+            DEFAULT_INSTALLER="install-void.sh"
+        else
+            DISTRO="Unknown"
+            DEFAULT_INSTALLER="install-umbriel.sh"
+        fi
+    elif [ -f /etc/arch-release ]; then
         DISTRO="Arch Linux"
         DEFAULT_INSTALLER="install-umbriel.sh"
-    elif [ -f /etc/void-release ]; then
+    elif command -v xbps-install >/dev/null 2>&1 || [ -d /var/db/xbps ]; then
         DISTRO="Void Linux"
         DEFAULT_INSTALLER="install-void.sh"
     else

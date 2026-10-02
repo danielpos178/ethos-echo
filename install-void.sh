@@ -33,8 +33,26 @@ command_exists() {
 # Preflight & Environment Checks
 # ------------------------------------------------------------------------------
 check_void_distro() {
-    if [ ! -f /etc/void-release ]; then
-        log_error "This script is tailored specifically for Void Linux. /etc/void-release was not found."
+    local IS_VOID=0
+
+    if [ -f /etc/os-release ]; then
+        if grep -q -E '^ID="?void"?' /etc/os-release; then
+            IS_VOID=1
+        fi
+    elif [ -f /usr/lib/os-release ]; then
+        if grep -q -E '^ID="?void"?' /usr/lib/os-release; then
+            IS_VOID=1
+        fi
+    fi
+
+    # Fallback to checking package manager or xbps database
+    if [ "$IS_VOID" -eq 0 ] && (command_exists xbps-install || [ -d /var/db/xbps ]); then
+        IS_VOID=1
+    fi
+
+    if [ "$IS_VOID" -eq 0 ]; then
+        log_error "This script is tailored specifically for Void Linux. Void Linux identification was not found."
+        log_info "Expected ID=void in /etc/os-release or xbps package manager."
         exit 1
     fi
     log_success "Void Linux detected."
