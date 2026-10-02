@@ -154,7 +154,7 @@ clean_existing_system() {
         fi
     done
 
-    # Remove supervised elogind and conflicting acpid (elogind is auto-activated via D-Bus)
+    # Remove supervised elogind and conflicting acpid/seatd (elogind is auto-activated via D-Bus)
     if [ -L "/var/service/elogind" ] || [ -d "/var/service/elogind" ]; then
         log_warn "Removing supervised /var/service/elogind (Void best practice: activated via D-Bus)..."
         sudo rm -f "/var/service/elogind" 2>/dev/null || true
@@ -162,6 +162,10 @@ clean_existing_system() {
     if [ -L "/var/service/acpid" ] || [ -d "/var/service/acpid" ]; then
         log_warn "Removing /var/service/acpid (prevents conflict with elogind ACPI handler)..."
         sudo rm -f "/var/service/acpid" 2>/dev/null || true
+    fi
+    if [ -L "/var/service/seatd" ] || [ -d "/var/service/seatd" ]; then
+        log_warn "Removing /var/service/seatd (using elogind for seat management)..."
+        sudo rm -f "/var/service/seatd" 2>/dev/null || true
     fi
 
     # Remove stale temporary build directories
@@ -263,7 +267,7 @@ install_build_tools() {
 install_graphics() {
     log_info "Detecting GPU and installing display drivers..."
     sudo xbps-install -y \
-        mesa-dri vulkan-loader xorg-server-xwayland
+        mesa-dri vulkan-loader xwayland
 
     if lspci 2>/dev/null | grep -qi "nvidia"; then
         log_info "NVIDIA GPU detected."
@@ -297,13 +301,25 @@ install_core_services() {
     log_info "Installing system plumbing, audio, session management, and fonts..."
     sudo xbps-install -y \
         dbus elogind NetworkManager accountsservice \
-        pipewire wireplumber wireplumber-elogind alsa-pipewire \
+        pipewire wireplumber alsa-pipewire \
         bluez \
         polkit lxqt-policykit \
         xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk xdg-user-dirs \
         brightnessctl \
         alacritty \
         nerd-fonts noto-fonts-ttf noto-fonts-emoji noto-fonts-cjk
+
+    # Configure ALSA PipeWire integration according to Void Linux Handbook
+    if [ -d /usr/share/alsa/alsa.conf.d ]; then
+        log_info "Configuring ALSA PipeWire routing..."
+        sudo mkdir -p /etc/alsa/conf.d
+        sudo ln -sf /usr/share/alsa/alsa.conf.d/50-pipewire.conf /etc/alsa/conf.d/ 2>/dev/null || true
+        sudo ln -sf /usr/share/alsa/alsa.conf.d/99-pipewire-default.conf /etc/alsa/conf.d/ 2>/dev/null || true
+    fi
+
+    # Update font cache
+    log_info "Refreshing system font cache..."
+    sudo fc-cache -f 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------------------
@@ -327,7 +343,7 @@ build_and_install_umbriel() {
         pixman-devel libdrm-devel libgbm-devel libglvnd-devel \
         eudev-libudev-devel \
         cairo-devel pango-devel \
-        tomlplusplus-devel json-c++ \
+        tomlplusplus-devel nlohmann-json \
         libxcb-devel xcb-util-wm-devel jemalloc-devel \
         xwayland-satellite 2>/dev/null || true
 
@@ -414,10 +430,14 @@ build_and_install_portal() {
 configure_greeter() {
     log_info "Configuring greetd and Noctalia Greeter for Void Linux..."
 
-    # Ensure dedicated 'greeter' system user exists with hardware access
+    # Ensure dedicated 'greeter' system group and user exist with hardware access
+    sudo getent group greeter >/dev/null 2>&1 || sudo groupadd -r greeter 2>/dev/null || true
     if ! id -u greeter >/dev/null 2>&1; then
         log_info "Creating 'greeter' system user..."
-        sudo useradd -M -G video,input -s /usr/bin/nologin -d /var/lib/noctalia-greeter greeter 2>/dev/null || true
+        sudo useradd -r -g greeter -G video,input -s /bin/sh -d /var/lib/noctalia-greeter greeter 2>/dev/null || \
+        sudo useradd -M -G video,input -s /bin/sh -d /var/lib/noctalia-greeter greeter 2>/dev/null || true
+    else
+        sudo usermod -s /bin/sh greeter 2>/dev/null || true
     fi
 
     # Ensure both greeter and _greeter (Void package default) have necessary hardware groups
@@ -431,11 +451,10 @@ configure_greeter() {
         fi
     done
 
-    # Ensure /etc/pam.d/greetd exists with standard Void PAM configuration
-    if [ ! -f /etc/pam.d/greetd ]; then
-        log_info "Configuring /etc/pam.d/greetd..."
-        sudo mkdir -p /etc/pam.d
-        cat <<EOF | sudo tee /etc/pam.d/greetd >/dev/null
+    # Ensure /etc/pam.d/greetd exists and includes pam_elogind.so
+    log_info "Configuring /etc/pam.d/greetd with elogind session support..."
+    sudo mkdir -p /etc/pam.d
+    cat <<EOF | sudo tee /etc/pam.d/greetd >/dev/null
 #%PAM-1.0
 auth       required     pam_securetty.so
 auth       requisite    pam_nologin.so
@@ -446,7 +465,6 @@ session    include      system-local-login
 session    optional     pam_elogind.so
 -session   optional     pam_gnome_keyring.so auto_start
 EOF
-    fi
 
     # Run upstream greeter setup script if available
     if [ -x /usr/share/noctalia-greeter/setup_greeter_system.sh ]; then
@@ -456,7 +474,9 @@ EOF
 
     # Ensure greeter state directory permissions
     sudo mkdir -p /var/lib/noctalia-greeter
-    sudo chown -R greeter:greeter /var/lib/noctalia-greeter
+    local GREETER_GRP
+    GREETER_GRP="$(id -gn greeter 2>/dev/null || echo greeter)"
+    sudo chown -R "greeter:${GREETER_GRP}" /var/lib/noctalia-greeter 2>/dev/null || true
     sudo chmod 755 /var/lib/noctalia-greeter
 
     # Write /etc/greetd/config.toml
@@ -478,8 +498,8 @@ EOF
 #!/bin/sh
 exec 2>&1
 
-# Wait for D-Bus system bus to be running
-sv check dbus >/dev/null 2>&1 || exit 1
+# Wait up to 10 seconds for D-Bus system bus to be running
+sv -w10 check dbus >/dev/null 2>&1 || exit 1
 
 # Respect system locale from /etc/locale.conf
 [ -r /etc/locale.conf ] && . /etc/locale.conf && export LANG
@@ -501,6 +521,17 @@ configure_session_and_helpers() {
     cat <<'EOF' | sudo tee /usr/local/bin/umbriel-session >/dev/null
 #!/bin/sh
 # Ethos Echo - Umbriel Session Wrapper (Void Linux)
+
+# Fallback for essential user environment variables
+[ -z "${USER:-}" ] && USER="$(id -un 2>/dev/null || whoami 2>/dev/null || echo user)"
+export USER
+[ -z "${LOGNAME:-}" ] && LOGNAME="$USER"
+export LOGNAME
+if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+    _user_home="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6)"
+    [ -n "$_user_home" ] && export HOME="$_user_home"
+fi
+export XDG_CONFIG_HOME="${HOME}/.config"
 
 # Fallback for XDG_RUNTIME_DIR if not set by PAM
 if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -d "${XDG_RUNTIME_DIR:-}" ]; then
@@ -525,7 +556,12 @@ export XDG_SESSION_DESKTOP="umbriel"
 # Log session output for diagnosis
 exec >"/tmp/umbriel-session-${USER}.log" 2>&1
 echo "=== Starting Umbriel Session ($(date)) ==="
-echo "USER=$USER, UID=$(id -u), XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+echo "USER=$USER, UID=$(id -u), HOME=$HOME, XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+
+if ! command -v umbriel >/dev/null 2>&1; then
+    echo "ERROR: umbriel compositor executable not found in PATH ($PATH)!"
+    exit 1
+fi
 
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
     exec dbus-run-session umbriel "$@"
@@ -665,6 +701,10 @@ activate_services() {
     if [ -L /var/service/acpid ] || [ -d /var/service/acpid ]; then
         log_info "Disabling acpid to prevent conflict with elogind..."
         sudo rm -f /var/service/acpid 2>/dev/null || true
+    fi
+    if [ -L /var/service/seatd ] || [ -d /var/service/seatd ]; then
+        log_info "Removing /var/service/seatd (using elogind for seat management)..."
+        sudo rm -f /var/service/seatd 2>/dev/null || true
     fi
 
     local CORE_SERVICES="dbus NetworkManager"
