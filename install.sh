@@ -23,15 +23,20 @@ log_error()   { printf "%b%s%b\n" "${RED}" "$1" "${RC}"; }
 detect_distro() {
     if [ -f /etc/arch-release ]; then
         DISTRO="Arch Linux"
+        DEFAULT_INSTALLER="install-umbriel.sh"
+    elif [ -f /etc/void-release ]; then
+        DISTRO="Void Linux"
+        DEFAULT_INSTALLER="install-void.sh"
     else
         DISTRO="Unknown"
+        DEFAULT_INSTALLER="install-umbriel.sh"
     fi
 }
 
 check_escalation() {
     if [ "$(id -u)" -eq 0 ]; then
         log_error "Do not run this installer as root or with sudo!"
-        log_info "makepkg and AUR tools strictly require running as a regular user."
+        log_info "Package helpers, builds, and user configurations require running as a regular user."
         log_info "Please run as your regular user: ./install.sh"
         exit 1
     fi
@@ -60,7 +65,7 @@ run_install_script() {
         chmod +x "$script"
     fi
 
-    log_info "Starting $description..."
+    log_info "Starting $description ($script)..."
     ./"$script"
 }
 
@@ -71,9 +76,11 @@ show_menu() {
     printf "${BOLD}${GREEN}====================================================${RC}\n"
     printf "System Detected: ${BOLD}%s${RC}\n" "$DISTRO"
     printf "%s\n" "----------------------------------------------------"
-    printf "1) ${BOLD}Full Umbriel Setup${RC} (Umbriel, Noctalia, Greeter, Alacritty)\n"
-    printf "2) ${BOLD}Update .bashrc${RC} (Copy from repository)\n"
-    printf "3) ${BOLD}Exit${RC}\n"
+    printf "1) ${BOLD}Full Setup for %s${RC} (Auto-detected: %s)\n" "$DISTRO" "$DEFAULT_INSTALLER"
+    printf "2) ${BOLD}Arch Linux Installer${RC} (install-umbriel.sh - pacman/AUR)\n"
+    printf "3) ${BOLD}Void Linux Installer${RC} (install-void.sh - xbps/runit)\n"
+    printf "4) ${BOLD}Update .bashrc${RC} (Copy from repository)\n"
+    printf "5) ${BOLD}Exit${RC}\n"
     printf "${BOLD}${GREEN}----------------------------------------------------${RC}\n"
     printf "Select an option: "
 }
@@ -87,16 +94,26 @@ main() {
         read -r choice
         case $choice in
             1)
-                run_install_script "install-umbriel.sh" "Umbriel & Noctalia Suite Installer"
+                run_install_script "$DEFAULT_INSTALLER" "Umbriel & Noctalia Suite ($DISTRO)"
                 printf "\nPress Enter to return to menu..."
                 read -r
                 ;;
             2)
-                update_bashrc
+                run_install_script "install-umbriel.sh" "Arch Linux Installer"
                 printf "\nPress Enter to return to menu..."
                 read -r
                 ;;
             3)
+                run_install_script "install-void.sh" "Void Linux Installer"
+                printf "\nPress Enter to return to menu..."
+                read -r
+                ;;
+            4)
+                update_bashrc
+                printf "\nPress Enter to return to menu..."
+                read -r
+                ;;
+            5)
                 log_info "Exiting installer. Goodbye!"
                 exit 0
                 ;;

@@ -1,6 +1,6 @@
 # Ethos Echo
 
-> **Ethos Echo** is a modern, modular, and aesthetic **Wayland desktop suite** built for Arch Linux. It pairs the high-performance **Umbriel** Wayland compositor with the native **Noctalia** desktop shell, the **Noctalia Greeter** (`greetd`), and the fast GPU-accelerated **Alacritty** terminal emulator—all harmonized around an authentic **Gruvbox Dark** color scheme.
+> **Ethos Echo** is a modern, modular, and aesthetic **Wayland desktop suite** built for **Arch Linux** and **Void Linux**. It pairs the high-performance **Umbriel** Wayland compositor with the native **Noctalia** desktop shell, the **Noctalia Greeter** (`greetd`), and the fast GPU-accelerated **Alacritty** terminal emulator—all harmonized around an authentic **Gruvbox Dark** color scheme.
 
 ---
 
@@ -20,26 +20,28 @@
 
 ## Overview
 
-Ethos Echo provides an independent, turnkey installation script (`install-umbriel.sh`) and cohesive configuration templates to set up a complete Wayland environment on fresh Arch Linux installations from the ground up:
+Ethos Echo provides dedicated, turnkey installation scripts (`install-umbriel.sh` for Arch Linux and `install-void.sh` for Void Linux) and cohesive configuration templates to set up a complete Wayland environment on fresh installations from the ground up:
 
 - **Umbriel Compositor** – Built on C++23 and `wlroots`, featuring scrolling, dwindle, and master tiling layouts, independent workspaces per monitor, blur, shadows, and smooth window animations.
 - **Noctalia Desktop Shell** – Native Wayland shell delivering a top status bar, dock, application launcher, quick-settings control center, notifications, and lock screen.
 - **Noctalia Greeter & greetd** – Modern graphical login screen integrated with `greetd`, sharing the same visual language and color scheme.
 - **Alacritty Terminal** – Fast, GPU-accelerated terminal pre-configured with the **Gruvbox Dark** palette and Meslo Nerd Fonts.
 - **Full System Plumbing** – Automated GPU detection (AMD, Intel, NVIDIA), PipeWire audio stack, Bluetooth, NetworkManager, Polkit authentication agent, XDG portals, and Wayland session files.
+- **Service Management** – Seamless integration with `systemd` (Arch) and `runit` (Void).
 
 ---
 
 ## Components
 
-| Component | Role | Source / Package |
-| :--- | :--- | :--- |
-| **Umbriel** | Wayland Compositor | `umbriel-git` (AUR) |
-| **Noctalia** | Desktop Shell (Bar, Launcher, Control Center) | `noctalia` / `noctalia-git` (AUR) |
-| **Noctalia Greeter** | Login Manager Greeter | `noctalia-greeter` (AUR) + `greetd` |
-| **Alacritty** | Terminal Emulator | `alacritty` (Arch Extra) |
-| **PipeWire Stack** | Audio & Media Routing | `pipewire`, `wireplumber`, `pipewire-pulse` |
-| **Theme** | Color Palette | Gruvbox Dark (Alacritty, Noctalia, Umbriel) |
+| Component | Role | Arch Linux (pacman/AUR) | Void Linux (xbps/Universal Repo) |
+| :--- | :--- | :--- | :--- |
+| **Umbriel** | Wayland Compositor | `umbriel-git` (AUR) | Compiled from source (Meson/Ninja) |
+| **Noctalia** | Desktop Shell (Bar, Launcher, Control Center) | `noctalia` / `noctalia-git` | `noctalia` (Universal Repo) |
+| **Noctalia Greeter** | Login Manager Greeter | `noctalia-greeter` + `greetd` | `noctalia-greeter` + `greetd` |
+| **Alacritty** | Terminal Emulator | `alacritty` (Arch Extra) | `alacritty` (Void official) |
+| **PipeWire Stack** | Audio & Media Routing | `pipewire`, `wireplumber` | `pipewire`, `wireplumber` |
+| **Service Manager** | Init & Daemon Supervisor | `systemd` | `runit` (`/var/service/`) |
+| **Theme** | Color Palette | Gruvbox Dark | Gruvbox Dark |
 
 ---
 
@@ -47,9 +49,9 @@ Ethos Echo provides an independent, turnkey installation script (`install-umbrie
 
 ### Prerequisites
 
-- A fresh or existing **Arch Linux** installation.
-- A user account with `sudo` / `doas` privileges.
-- An internet connection for downloading packages.
+- A fresh or existing **Arch Linux** or **Void Linux** installation (x86_64).
+- A regular user account with `sudo` privileges (running as root is strictly prevented).
+- An internet connection for downloading packages and source trees.
 
 ### Quick Start
 
@@ -60,12 +62,25 @@ Ethos Echo provides an independent, turnkey installation script (`install-umbrie
    ```
 
 2. **Run the installer:**
-   You can run either the interactive launcher or the standalone script directly:
-   ```bash
-   chmod +x install.sh install-umbriel.sh
-   ./install-umbriel.sh
-   ```
-   *(Or launch `./install.sh` and select Option 1).*
+   You can run either the interactive auto-detecting launcher or the distro-specific script directly:
+
+   - **Interactive Launcher (Auto-detects distribution):**
+     ```bash
+     chmod +x install.sh
+     ./install.sh
+     ```
+
+   - **Arch Linux standalone:**
+     ```bash
+     chmod +x install-umbriel.sh
+     ./install-umbriel.sh
+     ```
+
+   - **Void Linux standalone:**
+     ```bash
+     chmod +x install-void.sh
+     ./install-void.sh
+     ```
 
 3. **Reboot:**
    Once the installer finishes, reboot your system:
