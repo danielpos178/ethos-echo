@@ -154,11 +154,7 @@ clean_existing_system() {
         fi
     done
 
-    # Remove supervised elogind and conflicting acpid/seatd (elogind is auto-activated via D-Bus)
-    if [ -L "/var/service/elogind" ] || [ -d "/var/service/elogind" ]; then
-        log_warn "Removing supervised /var/service/elogind (Void best practice: activated via D-Bus)..."
-        sudo rm -f "/var/service/elogind" 2>/dev/null || true
-    fi
+    # Remove conflicting acpid and seatd (elogind manages ACPI events and seat sessions)
     if [ -L "/var/service/acpid" ] || [ -d "/var/service/acpid" ]; then
         log_warn "Removing /var/service/acpid (prevents conflict with elogind ACPI handler)..."
         sudo rm -f "/var/service/acpid" 2>/dev/null || true
@@ -498,8 +494,9 @@ EOF
 #!/bin/sh
 exec 2>&1
 
-# Wait up to 10 seconds for D-Bus system bus to be running
+# Wait up to 10 seconds for D-Bus system bus and elogind session daemon to be running
 sv -w10 check dbus >/dev/null 2>&1 || exit 1
+sv -w10 check elogind >/dev/null 2>&1 || exit 1
 
 # Respect system locale from /etc/locale.conf
 [ -r /etc/locale.conf ] && . /etc/locale.conf && export LANG
@@ -545,6 +542,10 @@ fi
 
 # Ensure standard paths
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+
+# Seat & Session identifiers
+export XDG_SEAT="${XDG_SEAT:-seat0}"
+export XDG_VTNR="${XDG_VTNR:-1}"
 
 # Wayland environment variables
 export MOZ_ENABLE_WAYLAND=1
@@ -691,13 +692,8 @@ EOF
 activate_services() {
     log_info "Enabling essential system services in runit..."
 
-    # 1. Core system daemons (dbus, NetworkManager)
-    # NOTE: elogind is auto-activated by D-Bus on Void Linux. Supervised /var/service/elogind
-    # causes duplicate instance PID collisions ("elogind is already running as PID ...").
-    if [ -L /var/service/elogind ] || [ -d /var/service/elogind ]; then
-        log_info "Removing /var/service/elogind (auto-activated via D-Bus)..."
-        sudo rm -f /var/service/elogind 2>/dev/null || true
-    fi
+    # 1. Core system daemons (dbus, elogind, NetworkManager)
+    # Disable conflicting acpid and seatd (elogind manages ACPI events and seat sessions)
     if [ -L /var/service/acpid ] || [ -d /var/service/acpid ]; then
         log_info "Disabling acpid to prevent conflict with elogind..."
         sudo rm -f /var/service/acpid 2>/dev/null || true
@@ -707,7 +703,7 @@ activate_services() {
         sudo rm -f /var/service/seatd 2>/dev/null || true
     fi
 
-    local CORE_SERVICES="dbus NetworkManager"
+    local CORE_SERVICES="dbus elogind NetworkManager"
     for svc in $CORE_SERVICES; do
         if [ -d "/etc/sv/$svc" ]; then
             sudo ln -sf "/etc/sv/$svc" /var/service/
