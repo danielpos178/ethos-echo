@@ -484,7 +484,7 @@ EOF
 vt = 1
 
 [default_session]
-command = "env LIBSEAT_BACKEND=seatd NOCTALIA_GREETER_LOG=/var/log/noctalia-greeter.log /usr/bin/noctalia-greeter-session"
+command = "env LIBSEAT_BACKEND=seatd WLR_RENDERER_ALLOW_SOFTWARE=1 WLR_NO_HARDWARE_CURSORS=1 NOCTALIA_GREETER_LOG=/var/log/noctalia-greeter.log /usr/bin/noctalia-greeter-session"
 user = "greeter"
 EOF
 
@@ -503,6 +503,8 @@ sv -w5 check seatd >/dev/null 2>&1 || true
 [ -r /etc/locale.conf ] && . /etc/locale.conf && export LANG
 
 export LIBSEAT_BACKEND=seatd
+export WLR_RENDERER_ALLOW_SOFTWARE=1
+export WLR_NO_HARDWARE_CURSORS=1
 
 exec greetd
 EOF
@@ -550,6 +552,10 @@ export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 export XDG_SEAT="${XDG_SEAT:-seat0}"
 export XDG_VTNR="${XDG_VTNR:-1}"
 export LIBSEAT_BACKEND="${LIBSEAT_BACKEND:-seatd}"
+
+# Software rendering & VM compatibility (QEMU/KVM/QXL/VirtualBox/llvmpipe)
+export WLR_RENDERER_ALLOW_SOFTWARE=1
+export WLR_NO_HARDWARE_CURSORS=1
 
 # Wayland environment variables
 export MOZ_ENABLE_WAYLAND=1
@@ -678,11 +684,13 @@ QT_QPA_PLATFORM=wayland;xcb
 XDG_CURRENT_DESKTOP=umbriel:GNOME
 XDG_SESSION_TYPE=wayland
 XDG_SESSION_DESKTOP=umbriel
+WLR_RENDERER_ALLOW_SOFTWARE=1
+WLR_NO_HARDWARE_CURSORS=1
 EOF
 
     # Also append to ~/.profile to guarantee availability on console / greetd sessions
     touch "${HOME}/.profile"
-    if ! grep -q "XDG_CURRENT_DESKTOP=umbriel:GNOME" "${HOME}/.profile"; then
+    if ! grep -q "WLR_RENDERER_ALLOW_SOFTWARE=1" "${HOME}/.profile"; then
         cat <<'EOF' >> "${HOME}/.profile"
 
 # Ethos Echo - Wayland Environment Variables
@@ -691,6 +699,8 @@ export QT_QPA_PLATFORM="wayland;xcb"
 export XDG_CURRENT_DESKTOP="umbriel:GNOME"
 export XDG_SESSION_TYPE="wayland"
 export XDG_SESSION_DESKTOP="umbriel"
+export WLR_RENDERER_ALLOW_SOFTWARE=1
+export WLR_NO_HARDWARE_CURSORS=1
 EOF
     fi
 
